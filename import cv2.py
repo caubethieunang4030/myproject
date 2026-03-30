@@ -4,7 +4,7 @@ import face_recognition
 import time
 from utils import load_and_encode_known_faces, record_attendance
 from config import IMAGE_LIB_DIR, INPUT_IMAGE_PATH, MATCH_THRESHOLD
-
+print("test")
 def main():
     known_encodings, known_names = load_and_encode_known_faces(IMAGE_LIB_DIR)
 
