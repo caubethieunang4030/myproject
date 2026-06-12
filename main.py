@@ -40,15 +40,26 @@ db_config = {
     'database': os.getenv('DB_DATABASE', 'chamcongdatabase')
 }
 
-THRESHOLD = 0.08  # Ngưỡng nghiêm ngặt giúp chống nhận diện nhầm
+THRESHOLD = 0.20  # Ngưỡng tối ưu cho mảng vector đã được chuẩn hóa (scale & translation invariant)
 
 # Quản lý cooldown ghi log chấm công (15 phút = 900 giây)
 LOG_COOLDOWN_SECONDS = 900
 last_logged_time = {} # Lưu {name: timestamp}
 
+def normalize_vector(vec):
+    """
+    Chuẩn hóa vector landmarks khuôn mặt để đạt được Translation & Scale Invariance.
+    Dịch chuyển tâm về gốc tọa độ (0,0,0) và chia cho độ lệch chuẩn.
+    """
+    centered = vec - np.mean(vec, axis=0)
+    std_val = np.std(centered)
+    if std_val == 0:
+        return centered
+    return centered / std_val
+
 def load_database():
     """
-    Tải cơ sở dữ liệu khuôn mặt từ bảng hocsinhvector của SQL Server.
+    Tải cơ sở dữ liệu khuôn mặt từ bảng vectormathocsinh của SQL Server.
     Cấu trúc trả về: {mahocsinh: {"name": tenhocsinh, "vector": np_array}}
     """
     database = {}
@@ -63,6 +74,7 @@ def load_database():
         )
         cursor = conn.cursor()
         
+        # câu lệnh sql viết thường toàn bộ tên bảng và tên cột
         sql_query = "select mahocsinh, tenhocsinh, facevector from vectormathocsinh"
         cursor.execute(sql_query)
         rows = cursor.fetchall()
@@ -74,9 +86,11 @@ def load_database():
                 vec_list = json.loads(facevector_str)
                 vec = np.array(vec_list, dtype=np.float32)
                 if vec.size == 1434:
+                    # Chuẩn hóa vector trước khi lưu vào RAM để đối chiếu
+                    normalized_vec = normalize_vector(vec.reshape(478, 3))
                     database[ma_hs] = {
                         "name": ten_hs,
-                        "vector": vec.reshape(478, 3)
+                        "vector": normalized_vec
                     }
             except Exception as ex:
                 print(f"❌ lỗi khi phân giải vector cho học sinh {ten_hs} ({ma_hs}): {ex}")
@@ -231,9 +245,12 @@ def main():
                 best_match_name = "Unknown"
                 min_dist = float('inf')
                 
+                # Chuẩn hóa target_vec trước khi so sánh
+                normalized_target_vec = normalize_vector(target_vec)
+                
                 for ma_hs, info in database.items():
                     saved_vec = info["vector"]
-                    dist = np.mean(np.linalg.norm(target_vec - saved_vec, axis=1))
+                    dist = np.mean(np.linalg.norm(normalized_target_vec - saved_vec, axis=1))
                     if dist < min_dist:
                         min_dist = dist
                         if dist < THRESHOLD:
