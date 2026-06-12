@@ -102,9 +102,10 @@ def load_database():
             conn.close()
     return database
 
-def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector):
+def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector, overwrite=False):
     """
     Lưu thông tin học sinh và mảng vector mẫu vào bảng vectormathocsinh của SQL Server.
+    Nếu overwrite=True, tiến hành cập nhật bản ghi nếu mã học sinh đã tồn tại.
     """
     conn = None
     try:
@@ -120,16 +121,35 @@ def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector):
         # chuyển mảng vector số thực thành chuỗi text json sạch để lưu vào nvarchar(max)
         chuoi_vector = json.dumps(mang_vector)
         
-        # câu lệnh sql viết thường toàn bộ tên bảng và tên cột
-        sql_query = """
-            insert into vectormathocsinh (mahocsinh, tenhocsinh, facevector) 
-            values (%s, %s, %s)
-        """
+        # Kiểm tra xem mã học sinh đã tồn tại trong DB chưa
+        cursor.execute("select count(*) from vectormathocsinh where mahocsinh = %s", (ma_hs,))
+        exists = cursor.fetchone()[0] > 0
         
-        cursor.execute(sql_query, (ma_hs, ten_hs, chuoi_vector))
-        conn.commit()
-        print(f"🚀 đã lưu thành công vector cho học sinh: {ten_hs}")
-        return True
+        if exists:
+            if not overwrite:
+                print(f"❌ lỗi: Mã học sinh '{ma_hs}' đã tồn tại trong database.")
+                return False
+            
+            # Câu lệnh cập nhật viết thường toàn bộ tên bảng và tên cột
+            sql_query = """
+                update vectormathocsinh 
+                set tenhocsinh = %s, facevector = %s 
+                where mahocsinh = %s
+            """
+            cursor.execute(sql_query, (ten_hs, chuoi_vector, ma_hs))
+            conn.commit()
+            print(f"🚀 đã cập nhật thành công vector cho học sinh: {ten_hs}")
+            return True
+        else:
+            # Câu lệnh chèn viết thường toàn bộ tên bảng và tên cột
+            sql_query = """
+                insert into vectormathocsinh (mahocsinh, tenhocsinh, facevector) 
+                values (%s, %s, %s)
+            """
+            cursor.execute(sql_query, (ma_hs, ten_hs, chuoi_vector))
+            conn.commit()
+            print(f"🚀 đã lưu thành công vector cho học sinh: {ten_hs}")
+            return True
     except Exception as e:
         print(f"❌ lỗi khi lưu vector: {e}")
         return False
@@ -323,12 +343,23 @@ def main():
                 ma_hs = input(f"{YELLOW} Nhập mã học sinh (ví dụ: hs001): {RESET}").strip()
                 name_input = input(f"{YELLOW} Nhập tên học sinh: {RESET}").strip()
                 if ma_hs and name_input:
+                    overwrite = False
+                    if ma_hs in database:
+                        existing_name = database[ma_hs]["name"]
+                        confirm = input(f"{YELLOW}⚠️ Mã học sinh '{ma_hs}' đã tồn tại (Tên: {existing_name}). Bạn có muốn cập nhật/ghi đè? (y/n): {RESET}").strip().lower()
+                        if confirm == 'y':
+                            overwrite = True
+                        else:
+                            print(f"{RED}[HỦY BỎ] Hủy đăng ký để tránh ghi đè dữ liệu.{RESET}\n")
+                            continue
+                            
                     # Ép phẳng mảng vector (1434 floats)
                     vector_list = current_target_vec.flatten().tolist()
-                    if luu_vector_hoc_sinh(ma_hs, name_input, vector_list):
+                    if luu_vector_hoc_sinh(ma_hs, name_input, vector_list, overwrite=overwrite):
                         # Load lại database để nhận diện real-time
                         database = load_database()
-                        print(f"{GREEN}[THÀNH CÔNG] Đã đăng ký thành công học sinh: '{name_input}' ({ma_hs}){RESET}\n")
+                        action_str = "cập nhật" if overwrite else "đăng ký"
+                        print(f"{GREEN}[THÀNH CÔNG] Đã {action_str} thành công học sinh: '{name_input}' ({ma_hs}){RESET}\n")
                     else:
                         print(f"{RED}[LỖI] Đăng ký thất bại do không thể lưu vào database.{RESET}\n")
                 else:
