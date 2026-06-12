@@ -1,0 +1,331 @@
+import cv2
+# pyrefly: ignore [missing-import]
+import mediapipe as mp
+import numpy as np
+import os
+import time
+import csv
+from datetime import datetime
+import json
+import pymssql
+from dotenv import load_dotenv
+
+# Tải cấu hình từ file .env
+load_dotenv()
+
+# Định nghĩa màu sắc ANSI phục vụ hiển thị terminal đẹp mắt
+GREEN = "\033[92m"
+RED = "\033[91m"
+CYAN = "\033[96m"
+YELLOW = "\033[93m"
+RESET = "\033[0m"
+BOLD = "\033[1m"
+
+# Khởi tạo Face Mesh từ mediapipe chuyên biệt cho VIDEO stream (static_image_mode=False)
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(
+    static_image_mode=False, 
+    max_num_faces=1, 
+    refine_landmarks=True,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5
+)
+
+# Cấu hình kết nối SQL Server (đọc từ file .env)
+db_config = {
+    'server': os.getenv('DB_SERVER', '127.0.0.1'),
+    'port': int(os.getenv('DB_PORT', 1433)),
+    'user': os.getenv('DB_USER', 'sa'),
+    'password': os.getenv('DB_PASSWORD', 'DuyAnhMs2026!'),
+    'database': os.getenv('DB_DATABASE', 'chamcongdatabase')
+}
+
+THRESHOLD = 0.08  # Ngưỡng nghiêm ngặt giúp chống nhận diện nhầm
+
+# Quản lý cooldown ghi log chấm công (15 phút = 900 giây)
+LOG_COOLDOWN_SECONDS = 900
+last_logged_time = {} # Lưu {name: timestamp}
+
+def load_database():
+    """
+    Tải cơ sở dữ liệu khuôn mặt từ bảng hocsinhvector của SQL Server.
+    Cấu trúc trả về: {mahocsinh: {"name": tenhocsinh, "vector": np_array}}
+    """
+    database = {}
+    conn = None
+    try:
+        conn = pymssql.connect(
+            server=db_config['server'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database']
+        )
+        cursor = conn.cursor()
+        
+        sql_query = "select mahocsinh, tenhocsinh, facevector from vectormathocsinh"
+        cursor.execute(sql_query)
+        rows = cursor.fetchall()
+        
+        for row in rows:
+            ma_hs, ten_hs, facevector_str = row
+            try:
+                # khôi phục chuỗi JSON thành mảng số thực
+                vec_list = json.loads(facevector_str)
+                vec = np.array(vec_list, dtype=np.float32)
+                if vec.size == 1434:
+                    database[ma_hs] = {
+                        "name": ten_hs,
+                        "vector": vec.reshape(478, 3)
+                    }
+            except Exception as ex:
+                print(f"❌ lỗi khi phân giải vector cho học sinh {ten_hs} ({ma_hs}): {ex}")
+                
+    except Exception as e:
+        print(f"❌ lỗi khi kết nối database để tải vector: {e}")
+    finally:
+        if conn:
+            conn.close()
+    return database
+
+def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector):
+    """
+    Lưu thông tin học sinh và mảng vector mẫu vào bảng vectormathocsinh của SQL Server.
+    """
+    conn = None
+    try:
+        conn = pymssql.connect(
+            server=db_config['server'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database']
+        )
+        cursor = conn.cursor()
+        
+        # chuyển mảng vector số thực thành chuỗi text json sạch để lưu vào nvarchar(max)
+        chuoi_vector = json.dumps(mang_vector)
+        
+        # câu lệnh sql viết thường toàn bộ tên bảng và tên cột
+        sql_query = """
+            insert into vectormathocsinh (mahocsinh, tenhocsinh, facevector) 
+            values (%s, %s, %s)
+        """
+        
+        cursor.execute(sql_query, (ma_hs, ten_hs, chuoi_vector))
+        conn.commit()
+        print(f"🚀 đã lưu thành công vector cho học sinh: {ten_hs}")
+        return True
+    except Exception as e:
+        print(f"❌ lỗi khi lưu vector: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def ghi_nhan_cham_cong(ma_hs):
+    """
+    Ghi nhận check-in vào bảng thongtinchamcong của SQL Server.
+    """
+    conn = None
+    try:
+        conn = pymssql.connect(
+            server=db_config['server'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database']
+        )
+        cursor = conn.cursor()
+        
+        # câu lệnh sql viết thường toàn bộ tên bảng và tên cột
+        sql_query = "insert into thongtinchamcong (mahocsinh) values (%s)"
+        
+        cursor.execute(sql_query, (ma_hs,))
+        conn.commit()
+        print(f"✅ điểm danh thành công cho mã học sinh: {ma_hs}")
+        return True
+    except Exception as e:
+        print(f"❌ lỗi khi ghi nhận chấm công: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def main():
+    print(f"\n{CYAN}=================================================={RESET}")
+    print(f"{CYAN}{BOLD}    HỆ THỐNG CHẤM CÔNG WEBCAM DEMO     {RESET}")
+    print(f"{CYAN}=================================================={RESET}")
+    
+    # Load database khuôn mặt từ SQL Server
+    print(f"[*] Đang tải cơ sở dữ liệu khuôn mặt...")
+    database = load_database()
+    print(f"{GREEN}[OK] Đã tải thành công {len(database)} khuôn mặt.{RESET}")
+    
+    # Mở camera của laptop
+    print(f"\n[*] Đang khởi động camera...")
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print(f"{RED}[LỖI] Không thể mở camera laptop. Vui lòng kiểm tra quyền truy cập camera.{RESET}")
+        return
+        
+    print(f"{GREEN}[OK] Camera đã sẵn sàng!{RESET}")
+    print(f"{YELLOW}>>> HƯỚNG DẪN ĐIỀU KHIỂN CAM:{RESET}")
+    print(f"  - Nhấn phím {BOLD}'q'{RESET} trên cửa sổ camera để {BOLD}THOÁT{RESET}.")
+    print(f"  - Nhấn phím {BOLD}'r'{RESET} trên cửa sổ camera để {BOLD}ĐĂNG KÝ KHUÔN MẶT MỚI{RESET} trực tiếp.\n")
+    
+    # Biến tạm lưu vector khuôn mặt đang được quét để đăng ký khi nhấn phím 'r'
+    current_target_vec = None
+    
+    # Biến theo dõi xác thực liên tiếp chống nhiễu
+    last_detected_name = None
+    consecutive_count = 0
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print(f"{RED}[LỖI] Không nhận được khung hình từ camera.{RESET}")
+            break
+            
+        # Lật ngang khung hình để giống hiệu ứng soi gương
+        frame = cv2.flip(frame, 1)
+        
+        # --- ĐOẠN CODE XỬ LÝ THIẾU SÁNG ---
+        # Tăng độ tương phản (Alpha) và độ sáng (Beta)
+        alpha = 1.3  # Hệ số tương phản (1.0 - 3.0) giúp làm rõ nét các đường biên
+        beta = 40    # Giá trị độ sáng cộng thêm (0 - 100) giúp kích sáng phòng tối
+        frame = cv2.convertScaleAbs(frame, alpha=alpha, beta=beta)
+        
+        h, w, _ = frame.shape
+        
+        # Tối ưu hóa hiệu năng: Chuyển ảnh sang BGR2RGB và đặt flag writable = False
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb_frame.flags.writeable = False
+        results = face_mesh.process(rgb_frame)
+        rgb_frame.flags.writeable = True
+        
+        current_target_vec = None
+        
+        if results.multi_face_landmarks:
+            for face_landmarks in results.multi_face_landmarks:
+                # 1. Trích xuất vector 1434 chiều từ 478 landmarks
+                target_vec = np.array([[v.x, v.y, v.z] for v in face_landmarks.landmark])
+                current_target_vec = target_vec  # Lưu lại vector hiện tại phục vụ đăng ký
+                
+                # Tính toán bounding box từ các điểm landmarks để vẽ khung quanh khuôn mặt
+                x_coords = [lm.x for lm in face_landmarks.landmark]
+                y_coords = [lm.y for lm in face_landmarks.landmark]
+                
+                x_min, x_max = int(min(x_coords) * w), int(max(x_coords) * w)
+                y_min, y_max = int(min(y_coords) * h), int(max(y_coords) * h)
+                
+                padding_x = int((x_max - x_min) * 0.1)
+                padding_y = int((y_max - y_min) * 0.1)
+                x1 = max(0, x_min - padding_x)
+                y1 = max(0, y_min - padding_y)
+                x2 = min(w, x_max + padding_x)
+                y2 = min(h, y_max + padding_y)
+                
+                # 2. So sánh và tìm khuôn mặt khớp nhất trong database
+                best_match_id = "Unknown"
+                best_match_name = "Unknown"
+                min_dist = float('inf')
+                
+                for ma_hs, info in database.items():
+                    saved_vec = info["vector"]
+                    dist = np.mean(np.linalg.norm(target_vec - saved_vec, axis=1))
+                    if dist < min_dist:
+                        min_dist = dist
+                        if dist < THRESHOLD:
+                            best_match_id = ma_hs
+                            best_match_name = info["name"]
+                
+                # 3. Xử lý hiển thị UI và Ghi nhật ký chấm công
+                current_time = time.time()
+                
+                if best_match_id != "Unknown":
+                    # Cập nhật số khung hình nhận dạng liên tiếp
+                    if best_match_id == last_detected_name:
+                        consecutive_count += 1
+                    else:
+                        last_detected_name = best_match_id
+                        consecutive_count = 1
+                    
+                    if consecutive_count >= 3:
+                        # Đạt điều kiện 3 khung hình liên tiếp, kiểm tra cooldown
+                        in_cooldown = (best_match_id in last_logged_time) and (current_time - last_logged_time[best_match_id] <= LOG_COOLDOWN_SECONDS)
+                        
+                        if not in_cooldown:
+                            # Gọi ghi nhận check-in SQL Server
+                            ghi_nhan_cham_cong(best_match_id)
+                            last_logged_time[best_match_id] = current_time
+                            print(f"{GREEN}[OK] Chấm công thành công: {best_match_name} ({best_match_id}) | Độ lệch: {min_dist:.5f}{RESET}")
+                            
+                            color = (0, 255, 0) # Màu xanh lá (BGR)
+                            label = f"Chao {best_match_name}! (Thanh cong)"
+                        else:
+                            # Trong thời gian cooldown, chỉ hiển thị "Chào [Tên]"
+                            color = (0, 255, 0) # Màu xanh lá (BGR)
+                            label = f"Chao {best_match_name}"
+                    else:
+                        # Đang nhận diện (chưa đủ 3 khung hình)
+                        color = (0, 165, 255) # Màu cam (BGR)
+                        label = f"Nhan dang... {best_match_name} ({consecutive_count}/3)"
+                else:
+                    # Không khớp
+                    last_detected_name = None
+                    consecutive_count = 0
+                    color = (0, 0, 255) # Màu đỏ (BGR)
+                    label = f"[X] - Unknown"
+                
+                # Vẽ bounding box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                
+                # Vẽ nhãn thông tin lên trên bounding box
+                cv2.rectangle(frame, (x1, y1 - 25), (x2, y1), color, -1)
+                cv2.putText(frame, label, (x1 + 5, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        else:
+            # Không phát hiện khuôn mặt nào, reset đếm liên tiếp
+            last_detected_name = None
+            consecutive_count = 0
+        
+        # 4. Hiển thị màn hình camera
+        cv2.imshow('Face Recognition Demo', frame)
+        
+        key = cv2.waitKey(1) & 0xFF
+        
+        # 5. Xử lý sự kiện nhấn phím
+        # THOÁT khi nhấn phím 'q'
+        if key == ord('q'):
+            break
+            
+        # ĐĂNG KÝ khuôn mặt mới trực tiếp khi nhấn phím 'r'
+        elif key == ord('r'):
+            if current_target_vec is not None:
+                print(f"\n{YELLOW}[ĐĂNG KÝ] Phát hiện lệnh đăng ký khuôn mặt.{RESET}")
+                ma_hs = input(f"{YELLOW} Nhập mã học sinh (ví dụ: hs001): {RESET}").strip()
+                name_input = input(f"{YELLOW} Nhập tên học sinh: {RESET}").strip()
+                if ma_hs and name_input:
+                    # Ép phẳng mảng vector (1434 floats)
+                    vector_list = current_target_vec.flatten().tolist()
+                    if luu_vector_hoc_sinh(ma_hs, name_input, vector_list):
+                        # Load lại database để nhận diện real-time
+                        database = load_database()
+                        print(f"{GREEN}[THÀNH CÔNG] Đã đăng ký thành công học sinh: '{name_input}' ({ma_hs}){RESET}\n")
+                    else:
+                        print(f"{RED}[LỖI] Đăng ký thất bại do không thể lưu vào database.{RESET}\n")
+                else:
+                    print(f"{RED}[HUỶ ĐĂNG KÝ] Thiếu thông tin mã học sinh hoặc tên học sinh. Huỷ bỏ.{RESET}\n")
+            else:
+                print(f"{RED}[CẢNH BÁO] Không phát hiện khuôn mặt nào trước camera để đăng ký!{RESET}")
+            
+    # Giải phóng tài nguyên
+    cap.release()
+    cv2.destroyAllWindows()
+    print(f"\n{CYAN}=================================================={RESET}")
+    print(f"{CYAN}       ĐÃ ĐÓNG CAMERA & KẾT THÚC DỰ ÁN DEMO       {RESET}")
+    print(f"{CYAN}=================================================={RESET}\n")
+
+if __name__ == "__main__":
+    main()
+
