@@ -40,7 +40,7 @@ db_config = {
     'database': os.getenv('DB_DATABASE', 'chamcongdatabase')
 }
 
-THRESHOLD = 0.20  # Ngưỡng tối ưu cho mảng vector đã được chuẩn hóa (scale & translation invariant)
+THRESHOLD = 0.25  # Ngưỡng tối ưu cho mảng vector đã được chuẩn hóa theo khoảng cách mắt (eye-distance normalized)
 
 # Quản lý cooldown ghi log chấm công (15 phút = 900 giây)
 LOG_COOLDOWN_SECONDS = 900
@@ -49,13 +49,14 @@ last_logged_time = {} # Lưu {name: timestamp}
 def normalize_vector(vec):
     """
     Chuẩn hóa vector landmarks khuôn mặt để đạt được Translation & Scale Invariance.
-    Dịch chuyển tâm về gốc tọa độ (0,0,0) và chia cho độ lệch chuẩn.
+    Dịch chuyển tâm về gốc tọa độ (0,0,0) và chia cho khoảng cách giữa hai mắt (inner corners).
     """
     centered = vec - np.mean(vec, axis=0)
-    std_val = np.std(centered)
-    if std_val == 0:
+    # Khoảng cách giữa 2 khóe mắt trong (landmark 133 và 362)
+    eye_dist = np.linalg.norm(vec[133] - vec[362])
+    if eye_dist == 0:
         return centered
-    return centered / std_val
+    return centered / eye_dist
 
 def load_database():
     """
