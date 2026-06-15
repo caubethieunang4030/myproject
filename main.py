@@ -264,6 +264,7 @@ def main():
     mouth_open_frames = 0
     mouth_closed_frames = 0
     is_first_liveness_frame = True
+    max_eye_openness = 0.0
     
     while True:
         ret, frame = cap.read()
@@ -362,6 +363,15 @@ def main():
                                 eye_l, eye_r, mouth_openness = features
                                 eye_openness = (eye_l + eye_r) / 2.0
                                 
+                                # Cập nhật giá trị độ mở mắt lớn nhất ghi nhận được trong phiên xác thực này
+                                max_eye_openness = max(max_eye_openness, eye_openness)
+                                
+                                # Ngưỡng nhắm mắt động: Tối đa là 0.20, tối thiểu là 0.17, bằng 80% độ mở mắt lớn nhất ghi nhận được
+                                eye_closed_threshold = max(0.17, min(0.20, max_eye_openness * 0.80))
+                                
+                                # In debug thông số mắt/miệng phục vụ tinh chỉnh thực tế
+                                print(f"[DEBUG] Mat: {eye_openness:.3f} (Max: {max_eye_openness:.3f}, Nguong: {eye_closed_threshold:.3f}) | Mieng: {mouth_openness:.3f} | Trang thai: Mat={blink_state}(C:{eye_closed_frames}/O:{eye_open_frames}), Mieng={mouth_state}")
+                                
                                 # --- 0. THIẾT LẬP TRẠNG THÁI KHỞI ĐẦU (ĐỂ TRÁNH GIẢ MẠO BẰNG ẢNH MỞ SẴN MIỆNG) ---
                                 if is_first_liveness_frame:
                                     is_first_liveness_frame = False
@@ -370,8 +380,8 @@ def main():
                                     mouth_open_frames = 0
                                     mouth_closed_frames = 0
                                     
-                                    # Kiểm tra trạng thái mắt khởi đầu
-                                    if eye_openness < 0.12:
+                                    # Kiểm tra trạng thái mắt khởi đầu sử dụng ngưỡng động
+                                    if eye_openness < eye_closed_threshold:
                                         blink_state = "closed_invalid"
                                         print(f"{YELLOW}[LIVENESS] Cảnh báo: Khởi đầu với mắt nhắm. Yêu cầu mở mắt trước.{RESET}")
                                     else:
@@ -385,7 +395,7 @@ def main():
                                         mouth_state = "closed"
                                 
                                 # --- 1. TÍNH TOÁN BỘ ĐẾM DEBOUNCE PHỤC VỤ LỌC NHIỄU KHUNG HÌNH (JITTER) ---
-                                if eye_openness < 0.12:
+                                if eye_openness < eye_closed_threshold:
                                     eye_closed_frames += 1
                                     eye_open_frames = 0
                                 else:
@@ -527,6 +537,7 @@ def main():
                                     mouth_open_frames = 0
                                     mouth_closed_frames = 0
                                     is_first_liveness_frame = True
+                                    max_eye_openness = 0.0
                                     
                                     color = (0, 165, 255)
                                     label = f"NHAY MAT HOAC MO MIENG ({LIVENESS_DURATION:.1f}s)"
