@@ -42,13 +42,13 @@ db_config = {
     'database': os.getenv('DB_DATABASE', 'chamcongdatabase')
 }
 
-THRESHOLD = 0.18  # Ngưỡng nhận diện khuôn mặt (giảm xuống 0.18 để tránh nhận diện nhầm người khác)
+THRESHOLD = 0.13  # Ngưỡng nhận diện khuôn mặt (giảm xuống 0.13 để bảo mật cao hơn, tránh nhận diện nhầm người khác)
 
 # Quản lý cooldown ghi log chấm công (15 phút = 900 giây)
 LOG_COOLDOWN_SECONDS = 900
 last_logged_time = {} # Lưu {name: timestamp}
 
-def load_database():
+def load_database(w=640, h=480):
     """
     Tải cơ sở dữ liệu khuôn mặt từ bảng vectormathocsinh của SQL Server.
     Cấu trúc trả về: {mahocsinh: {"name": tenhocsinh, "vectors": [np_array, ...]}}
@@ -81,12 +81,12 @@ def load_database():
                         if key in data:
                             vec = np.array(data[key], dtype=np.float32)
                             if vec.size == 1434:
-                                vectors.append(normalize_vector(vec.reshape(478, 3)))
+                                vectors.append(normalize_vector(vec.reshape(478, 3), w, h))
                 else:
                     # Thiết kế cũ: chỉ chứa 1 vector thẳng
                     vec = np.array(data, dtype=np.float32)
                     if vec.size == 1434:
-                        vectors.append(normalize_vector(vec.reshape(478, 3)))
+                        vectors.append(normalize_vector(vec.reshape(478, 3), w, h))
                 
                 if vectors:
                     database[ma_hs] = {
@@ -192,12 +192,7 @@ def main():
     print(f"{CYAN}{BOLD}    HỆ THỐNG CHẤM CÔNG WEBCAM DEMO     {RESET}")
     print(f"{CYAN}=================================================={RESET}")
     
-    # Load database khuôn mặt từ SQL Server
-    print(f"[*] Đang tải cơ sở dữ liệu khuôn mặt...")
-    database = load_database()
-    print(f"{GREEN}[OK] Đã tải thành công {len(database)} khuôn mặt.{RESET}")
-    
-    # Mở camera của laptop
+    # Mở camera của laptop trước để lấy thông số w, h
     print(f"\n[*] Đang khởi động camera...")
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -205,6 +200,20 @@ def main():
         return
         
     print(f"{GREEN}[OK] Camera đã sẵn sàng!{RESET}")
+    
+    # Đọc thử một khung hình để lấy kích thước thực tế
+    ret, frame_init = cap.read()
+    if not ret:
+        print(f"{RED}[LỖI] Không thể đọc khung hình khởi tạo từ camera.{RESET}")
+        cap.release()
+        return
+    h, w, _ = frame_init.shape
+    
+    # Load database khuôn mặt từ SQL Server sử dụng tỷ lệ w, h
+    print(f"[*] Đang tải cơ sở dữ liệu khuôn mặt...")
+    database = load_database(w, h)
+    print(f"{GREEN}[OK] Đã tải thành công {len(database)} khuôn mặt.{RESET}")
+    
     print(f"{YELLOW}>>> HƯỚNG DẪN ĐIỀU KHIỂN CAM:{RESET}")
     print(f"  - Nhấn phím {BOLD}'q'{RESET} trên cửa sổ camera để {BOLD}THOÁT{RESET}.")
     print(f"  - Nhấn phím {BOLD}'r'{RESET} trên cửa sổ camera để {BOLD}ĐĂNG KÝ KHUÔN MẶT MỚI{RESET} trực tiếp.\n")
@@ -230,6 +239,7 @@ def main():
     register_vectors = {}
     register_stable_frames = 0
     register_start_time = 0.0
+    register_blink_state = "waiting" # "waiting", "closed", "verified"
     
     while True:
         ret, frame = cap.read()
@@ -274,6 +284,7 @@ def main():
                 register_vectors = {}
                 register_stable_frames = 0
                 register_start_time = time.time()
+                register_blink_state = "waiting"
             else:
                 print(f"{RED}[HUỶ ĐĂNG KÝ] Thiếu thông tin mã học sinh hoặc tên học sinh. Huỷ bỏ.{RESET}\n")
             continue
@@ -322,29 +333,47 @@ def main():
                 best_match_name = "Unknown"
                 min_dist = float('inf')
                 
-                # Chuẩn hóa target_vec trước khi so sánh
-                normalized_target_vec = normalize_vector(target_vec)
+                # Chuẩn hóa target_vec trước khi so sánh, khử sai lệch tỷ lệ camera
+                normalized_target_vec = normalize_vector(target_vec, w, h)
                 
                 if register_mode:
                     # --- CHẾ ĐỘ ĐĂNG KÝ (THU THẬP NHIỀU GÓC MẶT) ---
                     features = extract_liveness_features(face_landmarks)
-                    _, _, _, yaw, pitch = features
+                    eye_l, eye_r, mouth_openness, yaw, pitch = features
                     
                     color = (255, 191, 0)  # Màu xanh lam sáng (Cyan)
                     
                     if register_step == "straight":
                         if abs(yaw) < 0.08:
-                            register_stable_frames += 1
-                            if register_stable_frames >= 10:
-                                register_vectors["straight"] = target_vec.flatten().tolist()
-                                register_step = "left"
-                                register_stable_frames = 0
-                                print(f"{GREEN}[OK] Da chup va luu goc THANG cho hoc sinh: {register_user_name}{RESET}")
+                            # State machine nháy mắt chống giả mạo bằng ảnh tĩnh
+                            if register_blink_state == "waiting":
+                                if eye_l < 0.15 and eye_r < 0.15:
+                                    register_blink_state = "closed"
+                                    print(f"{YELLOW}[*] Đã nhắm mắt. Vui lòng mở mắt để hoàn tất xác thực...{RESET}")
+                                label = "[1/3] DANG KY: NHAY MAT DE XAC MINH"
+                                cv2.putText(frame, "NHAY MAT DE XAC THUC LIVENESS", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                            elif register_blink_state == "closed":
+                                if eye_l > 0.22 and eye_r > 0.22:
+                                    register_blink_state = "verified"
+                                    register_stable_frames = 0
+                                    print(f"{GREEN}[OK] Xác thực liveness thành công!{RESET}")
+                                label = "[1/3] DANG KY: MO MAT DE TIEP TUC"
+                                cv2.putText(frame, "MO MAT DE HOAN TAT", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                            elif register_blink_state == "verified":
+                                register_stable_frames += 1
+                                if register_stable_frames >= 5:
+                                    register_vectors["straight"] = target_vec.flatten().tolist()
+                                    register_step = "left"
+                                    register_stable_frames = 0
+                                    print(f"{GREEN}[OK] Đã chụp và lưu góc THẲNG cho học sinh: {register_user_name}{RESET}")
+                                label = f"[1/3] DANG KY: NHIN THANG ({register_stable_frames}/5)"
+                                cv2.putText(frame, "GIU NGUYEN HUONG NHIN THANG", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
                         else:
+                            if register_blink_state != "verified":
+                                register_blink_state = "waiting"
                             register_stable_frames = 0
-                        
-                        label = f"[1/3] DANG KY: NHIN THANG ({register_stable_frames}/10)"
-                        cv2.putText(frame, "NHIN THANG VAO CAMERA", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                            label = "[1/3] DANG KY: NHIN THANG"
+                            cv2.putText(frame, "NHIN THANG VAO CAMERA", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
                         
                     elif register_step == "left":
                         if yaw < -0.15:
@@ -377,7 +406,7 @@ def main():
                     if register_step == "complete":
                         print(f"[*] Dang luu vector 3 goc cua {register_user_name} vao SQL Server...")
                         if luu_vector_hoc_sinh(register_user_id, register_user_name, register_vectors, overwrite=register_overwrite):
-                            database = load_database()
+                            database = load_database(w, h)
                             print(f"{GREEN}[THÀNH CÔNG] Đăng ký thành công học sinh: {register_user_name}{RESET}\n")
                             liveness_status = "approved"
                             liveness_result_time = time.time()
@@ -403,9 +432,6 @@ def main():
                     best_match_id = "Unknown"
                     best_match_name = "Unknown"
                     min_dist = float('inf')
-                    
-                    # Chuẩn hóa target_vec trước khi so sánh
-                    normalized_target_vec = normalize_vector(target_vec)
                     
                     for ma_hs, info in database.items():
                         # Lặp qua tất cả các vector đã lưu cho học sinh này
@@ -520,6 +546,7 @@ def main():
                     register_vectors = {}
                     register_stable_frames = 0
                     register_start_time = time.time()
+                    register_blink_state = "waiting"
                 else:
                     print(f"{RED}[HUỶ ĐĂNG KÝ] Thiếu thông tin mã học sinh hoặc tên học sinh. Huỷ bỏ.{RESET}\n")
             else:

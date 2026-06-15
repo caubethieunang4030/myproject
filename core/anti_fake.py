@@ -1,12 +1,17 @@
 import numpy as np
-def normalize_vector(vec):
+def normalize_vector(vec, w=640, h=480):
     """
-    Chuẩn hóa vector landmarks khuôn mặt để đạt được Translation & Scale Invariance.
-    Dịch chuyển tâm về gốc tọa độ (0,0,0) và chia cho khoảng cách giữa hai mắt (inner corners).
+    Chuẩn hóa vector landmarks khuôn mặt để đạt được Translation, Scale & Aspect Ratio Invariance.
+    Dịch chuyển tâm về gốc tọa độ (0,0,0) và chia cho khoảng cách giữa hai mắt (inner corners) trong không gian pixel.
     """
-    centered = vec - np.mean(vec, axis=0)
+    vec_pixel = vec.copy()
+    vec_pixel[:, 0] *= w
+    vec_pixel[:, 1] *= h
+    vec_pixel[:, 2] *= w  # Trục Z tỷ lệ theo chiều rộng để giữ nguyên tỷ lệ không gian 3D
+    
+    centered = vec_pixel - np.mean(vec_pixel, axis=0)
     # Khoảng cách giữa 2 khóe mắt trong (landmark 133 và 362)
-    eye_dist = np.linalg.norm(vec[133] - vec[362])
+    eye_dist = np.linalg.norm(vec_pixel[133] - vec_pixel[362])
     if eye_dist == 0:
         return centered
     return centered / eye_dist
@@ -15,21 +20,7 @@ def normalize_vector(vec):
 LIVENESS_DURATION = 2.0        # Thời gian bắt buộc kiểm tra chuyển động (giây)
 LIVENESS_THRESHOLD = 0.05      # Ngưỡng biến thiên tối thiểu để tính là có chuyển động (nháy mắt hoặc mở miệng)
 
-def normalize_vector(vec):
-    """
-    Chuẩn hóa vector landmarks khuôn mặt để đạt được Translation & Scale Invariance.
-    Dịch chuyển tâm về gốc tọa độ (0,0,0) và chia cho khoảng cách giữa hai mắt (inner corners).
-    """
-    centered = vec - np.mean(vec, axis=0)
-    # Khoảng cách giữa 2 khóe mắt trong (landmark 133 và 362)
-    eye_dist = np.linalg.norm(vec[133] - vec[362])
-    if eye_dist == 0:
-        return centered
-    return centered / eye_dist
 
-# Cấu hình liveness detection (xác thực chống giả mạo bằng ảnh tĩnh)
-LIVENESS_DURATION = 2.0        # Thời gian bắt buộc kiểm tra chuyển động (giây)
-LIVENESS_THRESHOLD = 0.05      # Ngưỡng biến thiên tối thiểu để tính là có chuyển động (nháy mắt hoặc mở miệng)
 
 def extract_liveness_features(face_landmarks):
     """
