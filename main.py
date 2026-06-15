@@ -60,11 +60,11 @@ def normalize_vector(vec):
 
 # Cấu hình liveness detection (xác thực chống giả mạo bằng ảnh tĩnh)
 LIVENESS_DURATION = 5.0        # Thời gian bắt buộc kiểm tra chuyển động (giây)
-LIVENESS_THRESHOLD = 0.04      # Ngưỡng biến thiên tối thiểu để tính là có chuyển động
+LIVENESS_THRESHOLD = 0.08      # Ngưỡng biến thiên tối thiểu để tính là có chuyển động (nháy mắt hoặc mở miệng)
 
 def extract_liveness_features(face_landmarks):
     """
-    Trích xuất 7 đặc trưng khoảng cách tỉ lệ trên khuôn mặt.
+    Trích xuất 3 đặc trưng động lực học cục bộ trên khuôn mặt (mắt và miệng).
     Đã chia cho khoảng cách mắt (landmark 133-362) để chống di chuyển xa gần (scale-invariant).
     """
     coords = np.array([[v.x, v.y, v.z] for v in face_landmarks.landmark])
@@ -73,16 +73,12 @@ def extract_liveness_features(face_landmarks):
     # Khoảng cách giữa 2 khóe mắt trong (inner corners) để làm chuẩn tỉ lệ
     eye_dist = dist(133, 362)
     if eye_dist == 0:
-        return [0.0] * 7
+        return [0.0] * 3
         
     features = [
         dist(159, 145) / eye_dist,  # Độ mở mắt trái (mí trên - mí dưới)
         dist(386, 374) / eye_dist,  # Độ mở mắt phải (mí trên - mí dưới)
-        dist(13, 14) / eye_dist,    # Độ mở miệng (môi trên - môi dưới)
-        dist(61, 291) / eye_dist,   # Độ rộng miệng (khóe trái - khóe phải)
-        dist(105, 159) / eye_dist,  # Khoảng cách chân mày trái đến mắt trái
-        dist(334, 386) / eye_dist,  # Khoảng cách chân mày phải đến mắt phải
-        dist(4, 0) / eye_dist       # Khoảng cách từ chóp mũi đến môi trên
+        dist(13, 14) / eye_dist     # Độ mở miệng (môi trên - môi dưới)
     ]
     return features
 
