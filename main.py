@@ -1,5 +1,4 @@
 import cv2
-# pyrefly: ignore [missing-import]
 import mediapipe as mp
 import numpy as np
 import os
@@ -10,12 +9,9 @@ import json
 import pymssql
 from dotenv import load_dotenv
 import random
-# pyrefly: ignore [missing-import]
 from core.anti_fake import normalize_vector, extract_liveness_features
-# Tải cấu hình từ file .env
 load_dotenv()
 
-# Định nghĩa màu sắc ANSI phục vụ hiển thị terminal đẹp mắt
 GREEN = "\033[92m"
 RED = "\033[91m"
 CYAN = "\033[96m"
@@ -94,20 +90,16 @@ def load_database(w=640, h=480):
                         "vectors": vectors
                     }
             except Exception as ex:
-                print(f"❌ lỗi khi phân giải vector cho học sinh {ten_hs} ({ma_hs}): {ex}")
+                print(f"lỗi khi phân giải vector cho học sinh {ten_hs} ({ma_hs}): {ex}")
                 
     except Exception as e:
-        print(f"❌ lỗi khi kết nối database để tải vector: {e}")
+        print(f"lỗi khi kết nối database để tải vector: {e}")
     finally:
         if conn:
             conn.close()
     return database
 
 def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector, overwrite=False):
-    """
-    Lưu thông tin học sinh và mảng vector mẫu vào bảng vectormathocsinh của SQL Server.
-    Nếu overwrite=True, tiến hành cập nhật bản ghi nếu mã học sinh đã tồn tại.
-    """
     conn = None
     try:
         conn = pymssql.connect(
@@ -128,7 +120,7 @@ def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector, overwrite=False):
         
         if exists:
             if not overwrite:
-                print(f"❌ lỗi: Mã học sinh '{ma_hs}' đã tồn tại trong database.")
+                print(f"lỗi: Mã học sinh '{ma_hs}' đã tồn tại trong database.")
                 return False
             
             # Câu lệnh cập nhật viết thường toàn bộ tên bảng và tên cột
@@ -152,7 +144,7 @@ def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector, overwrite=False):
             print(f"🚀 đã lưu thành công vector cho học sinh: {ten_hs}")
             return True
     except Exception as e:
-        print(f"❌ lỗi khi lưu vector: {e}")
+        print(f"lỗi khi lưu vector: {e}")
         return False
     finally:
         if conn:
@@ -178,10 +170,10 @@ def ghi_nhan_cham_cong(ma_hs):
         
         cursor.execute(sql_query, (ma_hs,))
         conn.commit()
-        print(f"✅ điểm danh thành công cho mã học sinh: {ma_hs}")
+        print(f"điểm danh thành công cho mã học sinh: {ma_hs}")
         return True
     except Exception as e:
-        print(f"❌ lỗi khi ghi nhận chấm công: {e}")
+        print(f"lỗi khi ghi nhận chấm công: {e}")
         return False
     finally:
         if conn:
@@ -226,13 +218,13 @@ def main():
     consecutive_count = 0
     
     # Quản lý hiển thị kết quả xác thực / đăng ký
-    liveness_status = "idle"     # Trạng thái: "idle", "approved", "rejected"
-    liveness_result_time = 0.0   # Lưu thời điểm hiển thị kết quả
-    liveness_result_msg = ""     # Thông báo kết quả để hiển thị lên màn hình
+    liveness_status = "idle"     
+    liveness_result_time = 0.0 
+    liveness_result_msg = ""    
     
     # Quản lý đăng ký học sinh mới bằng cách xoay đầu
     register_mode = False
-    register_step = "idle"       # "idle", "straight", "left", "right", "complete"
+    register_step = "idle"  
     register_user_id = ""
     register_user_name = ""
     register_overwrite = False
@@ -250,16 +242,15 @@ def main():
         current_time = time.time()
         
         # Kiểm tra timeout 10 giây trong chế độ đăng ký góc mặt
-        if register_mode and (current_time - register_start_time > 10.0):
-            print(f"\n{RED}[HẾT GIỜ] Đã quá 10 giây mà chưa hoàn tất quét 3 góc mặt. Quay lại luồng nhập thông tin.{RESET}")
+        if register_mode and (current_time - register_start_time > 20.0):
+            print(f"\n{RED}[HẾT GIỜ] Đã quá 20 giây mà chưa hoàn tất quét 3 góc mặt. Quay lại luồng nhập thông tin.{RESET}")
             liveness_status = "rejected"
             liveness_result_time = current_time
-            liveness_result_msg = "Qua thoi gian (10s)!"
+            liveness_result_msg = "Qua thoi gian (20s)!"
             
             register_mode = False
             register_step = "idle"
             
-            # Tự động reprompt yêu cầu nhập lại thông tin học sinh
             print(f"\n{YELLOW}[ĐĂNG KÝ LẠI] Vui lòng nhập lại thông tin học sinh...{RESET}")
             ma_hs = input(f"{YELLOW} Nhập mã học sinh (ví dụ: hs001): {RESET}").strip()
             name_input = input(f"{YELLOW} Nhập tên học sinh: {RESET}").strip()
@@ -274,7 +265,6 @@ def main():
                         print(f"{RED}[HỦY BỎ] Hủy đăng ký để tránh ghi đè dữ liệu.{RESET}\n")
                         continue
                 
-                # Khởi động lại luồng quét và reset lại thời gian bắt đầu quét
                 print(f"{YELLOW}[*] Bắt đầu quét góc mặt. Vui lòng nhìn thẳng vào camera...{RESET}")
                 register_mode = True
                 register_step = "straight"
