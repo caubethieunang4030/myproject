@@ -38,7 +38,7 @@ db_config = {
     'database': os.getenv('DB_DATABASE', 'chamcongdatabase')
 }
 
-THRESHOLD = 0.13  # Ngưỡng nhận diện khuôn mặt (giảm xuống 0.13 để bảo mật cao hơn, tránh nhận diện nhầm người khác)
+THRESHOLD = 0.15  # Ngưỡng nhận diện khuôn mặt (tăng lên 0.15 để tăng tỷ lệ nhận dạng học sinh thật)
 
 # Quản lý cooldown ghi log chấm công (15 phút = 900 giây)
 LOG_COOLDOWN_SECONDS = 900
