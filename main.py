@@ -42,7 +42,7 @@ db_config = {
     'database': os.getenv('DB_DATABASE', 'chamcongdatabase')
 }
 
-THRESHOLD = 0.25  # Ngưỡng tối ưu cho mảng vector đã được chuẩn hóa theo khoảng cách mắt (eye-distance normalized)
+THRESHOLD = 0.18  # Ngưỡng nhận diện khuôn mặt (giảm xuống 0.18 để tránh nhận diện nhầm người khác)
 
 # Quản lý cooldown ghi log chấm công (15 phút = 900 giây)
 LOG_COOLDOWN_SECONDS = 900
@@ -416,6 +416,9 @@ def main():
                                 if dist < THRESHOLD:
                                     best_match_id = ma_hs
                                     best_match_name = info["name"]
+                                    
+                    # In log debug khoảng cách nhận dạng thực tế để dễ căn chỉnh
+                    print(f"[DEBUG] Khop: {best_match_name} (ID: {best_match_id}) | Min Dist: {min_dist:.4f} | Nguong THRESHOLD: {THRESHOLD}")
                     
                     # 3. Xử lý hiển thị UI và Ghi nhật ký chấm công tức thì
                     current_time = time.time()
