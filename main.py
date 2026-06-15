@@ -250,6 +250,14 @@ def main():
     liveness_result_msg = ""     # Thông báo kết quả để hiển thị lên màn hình
     lost_face_counter = 0        # Bộ đếm số khung hình mất dấu khuôn mặt để lọc nhiễu
     
+    # Máy trạng thái xác thực chủ động (nháy mắt / mở miệng)
+    blink_state = "open"
+    blink_closed_time = 0.0
+    blink_detected = False
+    mouth_state = "closed"
+    mouth_opened_time = 0.0
+    mouth_detected = False
+    
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -327,7 +335,7 @@ def main():
                     color = (0, 0, 255)  # Đỏ (BGR)
                     label = liveness_result_msg
                 else:
-                    # Trạng thái đang xác thực chuyển động
+                    # Trạng thái đang xác thực chuyển động (Active Liveness)
                     if liveness_status == "validating":
                         # Chỉ hủy ngay lập tức nếu phát hiện rõ ràng một người khác (không phải Unknown và không phải liveness_user)
                         if best_match_id != "Unknown" and best_match_id != liveness_user:
@@ -344,7 +352,38 @@ def main():
                                 # Nhận diện đúng học sinh, reset bộ đếm mất dấu
                                 lost_face_counter = 0
                                 features = extract_liveness_features(face_landmarks)
-                                liveness_history.append(features)
+                                eye_l, eye_r, mouth_openness = features
+                                eye_openness = (eye_l + eye_r) / 2.0
+                                
+                                # --- 1. MÁY TRẠNG THÁI NHÁY MẮT (BLINK STATE MACHINE) ---
+                                if blink_state == "open":
+                                    if eye_openness < 0.12:
+                                        blink_state = "closed"
+                                        blink_closed_time = current_time
+                                elif blink_state == "closed":
+                                    if eye_openness > 0.22:
+                                        duration = current_time - blink_closed_time
+                                        if 0.05 <= duration <= 0.5:
+                                            blink_detected = True
+                                            print(f"{GREEN}[LIVENESS] Đã phát hiện nháy mắt hợp lệ! Duration: {duration:.3f}s{RESET}")
+                                        blink_state = "open"
+                                    elif current_time - blink_closed_time > 0.6:
+                                        blink_state = "open"
+                                        
+                                # --- 2. MÁY TRẠNG THÁI MỞ MIỆNG (MOUTH STATE MACHINE) ---
+                                if mouth_state == "closed":
+                                    if mouth_openness > 0.18:
+                                        mouth_state = "open"
+                                        mouth_opened_time = current_time
+                                elif mouth_state == "open":
+                                    if mouth_openness < 0.08:
+                                        duration = current_time - mouth_opened_time
+                                        if 0.1 <= duration <= 1.0:
+                                            mouth_detected = True
+                                            print(f"{GREEN}[LIVENESS] Đã phát hiện mở miệng hợp lệ! Duration: {duration:.3f}s{RESET}")
+                                        mouth_state = "closed"
+                                    elif current_time - mouth_opened_time > 1.2:
+                                        mouth_state = "closed"
                             else:
                                 # Nhận diện ra Unknown (tạm thời mất dấu), tăng bộ đếm
                                 lost_face_counter += 1
@@ -362,45 +401,40 @@ def main():
                                 elapsed = current_time - liveness_start_time
                                 time_left = max(0.0, LIVENESS_DURATION - elapsed)
                                 
-                                color = (0, 165, 255)  # Màu cam (BGR)
-                                label = f"Xac minh chuyen dong... {best_match_name} ({time_left:.1f}s)"
-                                
-                                # Hiển thị mức độ chuyển động hiện tại lên giao diện
-                                if len(liveness_history) > 1:
-                                    ranges = np.max(liveness_history, axis=0) - np.min(liveness_history, axis=0)
-                                    max_range = np.max(ranges)
-                                    bar_len = int(min(20, max_range * 100))
-                                    progress_bar = "[" + "="*bar_len + " "*(20-bar_len) + "]"
-                                    cv2.putText(frame, f"Motion level: {max_range:.4f} {progress_bar}", (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1, cv2.LINE_AA)
-                                
-                                # Khi đủ thời gian (2 giây)
-                                if elapsed >= LIVENESS_DURATION:
-                                    if len(liveness_history) > 1:
-                                        ranges = np.max(liveness_history, axis=0) - np.min(liveness_history, axis=0)
-                                        max_range = np.max(ranges)
-                                    else:
-                                        max_range = 0.0
-                                        
-                                    print(f"[*] Kết thúc {LIVENESS_DURATION} giây liveness. Độ biến thiên lớn nhất: {max_range:.5f}")
+                                # --- 3. KIỂM TRA PHÊ DUYỆT NGAY LẬP TỨC (INSTANT APPROVE) ---
+                                if blink_detected or mouth_detected:
+                                    ghi_nhan_cham_cong(liveness_user)
+                                    last_logged_time[liveness_user] = current_time
+                                    liveness_status = "approved"
+                                    liveness_result_time = current_time
+                                    liveness_result_msg = f"Chao {best_match_name}! (Thanh cong)"
                                     
-                                    if max_range >= LIVENESS_THRESHOLD:
-                                        # Thành công
-                                        ghi_nhan_cham_cong(liveness_user)
-                                        last_logged_time[liveness_user] = current_time
-                                        liveness_status = "approved"
-                                        liveness_result_time = current_time
-                                        liveness_result_msg = f"Chao {best_match_name}! (Thanh cong)"
-                                        print(f"{GREEN}[OK] Xác minh chuyển động thành công cho {best_match_name} | Motion: {max_range:.5f} (Dat){RESET}")
-                                    else:
-                                        # Thất bại (Ảnh tĩnh hoặc không chuyển động)
-                                        liveness_status = "rejected"
-                                        liveness_result_time = current_time
-                                        liveness_result_msg = "CANH BAO: Gia mao / Anh tinh!"
-                                        print(f"{RED}[CANH BÁO] Phát hiện giả mạo bằng ảnh tĩnh cho {best_match_name} | Motion: {max_range:.5f} (Khong dat){RESET}")
+                                    reason = "Nháy mắt" if blink_detected else "Mở miệng"
+                                    print(f"{GREEN}[OK] Xác minh thành công ({reason}) cho {best_match_name}!{RESET}")
                                     
                                     liveness_user = None
                                     liveness_history = []
                                     lost_face_counter = 0
+                                    
+                                    color = (0, 255, 0)
+                                    label = liveness_result_msg
+                                else:
+                                    color = (0, 165, 255)  # Màu cam (BGR)
+                                    label = f"NHAY MAT HOAC MO MIENG ({time_left:.1f}s)"
+                                    
+                                    # Vẽ hướng dẫn hành động nổi bật trên màn hình
+                                    cv2.putText(frame, "YEU CAU: NHAY MAT HOAC MO MIENG CHU DONG", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 165, 255), 1, cv2.LINE_AA)
+                                    
+                                    # Nếu hết thời gian 2 giây mà chưa thực hiện hành động
+                                    if elapsed >= LIVENESS_DURATION:
+                                        liveness_status = "rejected"
+                                        liveness_result_time = current_time
+                                        liveness_result_msg = "CANH BAO: Gia mao / Anh tinh!"
+                                        print(f"{RED}[CANH BÁO] Phát hiện giả mạo bằng ảnh tĩnh cho {best_match_name} (Hết 2s không có hành động){RESET}")
+                                        
+                                        liveness_user = None
+                                        liveness_history = []
+                                        lost_face_counter = 0
                     
                     # Trạng thái rảnh (đang chờ kích hoạt xác thực)
                     elif liveness_status == "idle":
@@ -419,16 +453,24 @@ def main():
                                     color = (0, 255, 0)
                                     label = f"Chao {best_match_name}"
                                 else:
-                                    # Kích hoạt xác thực chuyển động
-                                    print(f"{YELLOW}[*] Bắt đầu kiểm tra chuyển động cho: {best_match_name} (Nháy mắt hoặc mấp máy môi)...{RESET}")
+                                    # Kích hoạt xác thực chuyển động chủ động
+                                    print(f"{YELLOW}[*] Bắt đầu xác thực chủ động cho: {best_match_name} (Yêu cầu Nháy mắt hoặc Mở miệng)...{RESET}")
                                     liveness_status = "validating"
                                     liveness_user = best_match_id
                                     liveness_start_time = current_time
-                                    liveness_history = [extract_liveness_features(face_landmarks)]
+                                    liveness_history = []
                                     lost_face_counter = 0
                                     
+                                    # Reset các cờ trạng thái hành động
+                                    blink_state = "open"
+                                    blink_closed_time = 0.0
+                                    blink_detected = False
+                                    mouth_state = "closed"
+                                    mouth_opened_time = 0.0
+                                    mouth_detected = False
+                                    
                                     color = (0, 165, 255)
-                                    label = f"Xac minh chuyen dong... {best_match_name} ({LIVENESS_DURATION:.1f}s)"
+                                    label = f"NHAY MAT HOAC MO MIENG ({LIVENESS_DURATION:.1f}s)"
                             else:
                                 color = (0, 165, 255)
                                 label = f"Nhan dang... {best_match_name} ({consecutive_count}/3)"
