@@ -258,6 +258,13 @@ def main():
     mouth_opened_time = 0.0
     mouth_detected = False
     
+    # Bộ đếm khung hình phục vụ lọc nhiễu (debounce) và cờ kiểm tra khung hình đầu tiên
+    eye_closed_frames = 0
+    eye_open_frames = 0
+    mouth_open_frames = 0
+    mouth_closed_frames = 0
+    is_first_liveness_frame = True
+    
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -355,13 +362,54 @@ def main():
                                 eye_l, eye_r, mouth_openness = features
                                 eye_openness = (eye_l + eye_r) / 2.0
                                 
-                                # --- 1. MÁY TRẠNG THÁI NHÁY MẮT (BLINK STATE MACHINE) ---
-                                if blink_state == "open":
+                                # --- 0. THIẾT LẬP TRẠNG THÁI KHỞI ĐẦU (ĐỂ TRÁNH GIẢ MẠO BẰNG ẢNH MỞ SẴN MIỆNG) ---
+                                if is_first_liveness_frame:
+                                    is_first_liveness_frame = False
+                                    eye_closed_frames = 0
+                                    eye_open_frames = 0
+                                    mouth_open_frames = 0
+                                    mouth_closed_frames = 0
+                                    
+                                    # Kiểm tra trạng thái mắt khởi đầu
                                     if eye_openness < 0.12:
+                                        blink_state = "closed_invalid"
+                                        print(f"{YELLOW}[LIVENESS] Cảnh báo: Khởi đầu với mắt nhắm. Yêu cầu mở mắt trước.{RESET}")
+                                    else:
+                                        blink_state = "open"
+                                        
+                                    # Kiểm tra trạng thái miệng khởi đầu
+                                    if mouth_openness > 0.15:
+                                        mouth_state = "open_invalid"
+                                        print(f"{YELLOW}[LIVENESS] Cảnh báo: Khởi đầu với miệng mở. Yêu cầu ngậm miệng trước.{RESET}")
+                                    else:
+                                        mouth_state = "closed"
+                                
+                                # --- 1. TÍNH TOÁN BỘ ĐẾM DEBOUNCE PHỤC VỤ LỌC NHIỄU KHUNG HÌNH (JITTER) ---
+                                if eye_openness < 0.12:
+                                    eye_closed_frames += 1
+                                    eye_open_frames = 0
+                                else:
+                                    eye_open_frames += 1
+                                    eye_closed_frames = 0
+                                    
+                                if mouth_openness > 0.18:
+                                    mouth_open_frames += 1
+                                    mouth_closed_frames = 0
+                                else:
+                                    mouth_closed_frames += 1
+                                    mouth_open_frames = 0
+                                
+                                # --- 2. MÁY TRẠNG THÁI NHÁY MẮT (BLINK STATE MACHINE) ---
+                                if blink_state == "closed_invalid":
+                                    if eye_open_frames >= 3:
+                                        blink_state = "open"
+                                        print(f"{GREEN}[LIVENESS] Mắt đã mở. Sẵn sàng nhận diện nháy mắt.{RESET}")
+                                elif blink_state == "open":
+                                    if eye_closed_frames >= 2:  # Cần nhắm ít nhất 2 khung hình liên tiếp
                                         blink_state = "closed"
                                         blink_closed_time = current_time
                                 elif blink_state == "closed":
-                                    if eye_openness > 0.22:
+                                    if eye_open_frames >= 2:  # Cần mở lại ít nhất 2 khung hình liên tiếp
                                         duration = current_time - blink_closed_time
                                         if 0.05 <= duration <= 0.5:
                                             blink_detected = True
@@ -370,13 +418,17 @@ def main():
                                     elif current_time - blink_closed_time > 0.6:
                                         blink_state = "open"
                                         
-                                # --- 2. MÁY TRẠNG THÁI MỞ MIỆNG (MOUTH STATE MACHINE) ---
-                                if mouth_state == "closed":
-                                    if mouth_openness > 0.18:
+                                # --- 3. MÁY TRẠNG THÁI MỞ MIỆNG (MOUTH STATE MACHINE) ---
+                                if mouth_state == "open_invalid":
+                                    if mouth_closed_frames >= 3:
+                                        mouth_state = "closed"
+                                        print(f"{GREEN}[LIVENESS] Miệng đã đóng. Sẵn sàng nhận diện mở miệng.{RESET}")
+                                elif mouth_state == "closed":
+                                    if mouth_open_frames >= 3:  # Cần mở ít nhất 3 khung hình liên tiếp (~0.1s)
                                         mouth_state = "open"
                                         mouth_opened_time = current_time
                                 elif mouth_state == "open":
-                                    if mouth_openness < 0.08:
+                                    if mouth_closed_frames >= 3:  # Cần đóng lại ít nhất 3 khung hình liên tiếp
                                         duration = current_time - mouth_opened_time
                                         if 0.1 <= duration <= 1.0:
                                             mouth_detected = True
@@ -401,7 +453,7 @@ def main():
                                 elapsed = current_time - liveness_start_time
                                 time_left = max(0.0, LIVENESS_DURATION - elapsed)
                                 
-                                # --- 3. KIỂM TRA PHÊ DUYỆT NGAY LẬP TỨC (INSTANT APPROVE) ---
+                                # --- 4. KIỂM TRA PHÊ DUYỆT NGAY LẬP TỨC (INSTANT APPROVE) ---
                                 if blink_detected or mouth_detected:
                                     ghi_nhan_cham_cong(liveness_user)
                                     last_logged_time[liveness_user] = current_time
@@ -468,6 +520,13 @@ def main():
                                     mouth_state = "closed"
                                     mouth_opened_time = 0.0
                                     mouth_detected = False
+                                    
+                                    # Reset các bộ đếm debounce và cờ đầu tiên
+                                    eye_closed_frames = 0
+                                    eye_open_frames = 0
+                                    mouth_open_frames = 0
+                                    mouth_closed_frames = 0
+                                    is_first_liveness_frame = True
                                     
                                     color = (0, 165, 255)
                                     label = f"NHAY MAT HOAC MO MIENG ({LIVENESS_DURATION:.1f}s)"
