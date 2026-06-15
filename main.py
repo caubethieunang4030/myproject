@@ -229,12 +229,54 @@ def main():
     register_overwrite = False
     register_vectors = {}
     register_stable_frames = 0
+    register_start_time = 0.0
     
     while True:
         ret, frame = cap.read()
         if not ret:
             print(f"{RED}[LỖI] Không nhận được khung hình từ camera.{RESET}")
             break
+            
+        current_time = time.time()
+        
+        # Kiểm tra timeout 10 giây trong chế độ đăng ký góc mặt
+        if register_mode and (current_time - register_start_time > 10.0):
+            print(f"\n{RED}[HẾT GIỜ] Đã quá 10 giây mà chưa hoàn tất quét 3 góc mặt. Quay lại luồng nhập thông tin.{RESET}")
+            liveness_status = "rejected"
+            liveness_result_time = current_time
+            liveness_result_msg = "Qua thoi gian (10s)!"
+            
+            register_mode = False
+            register_step = "idle"
+            
+            # Tự động reprompt yêu cầu nhập lại thông tin học sinh
+            print(f"\n{YELLOW}[ĐĂNG KÝ LẠI] Vui lòng nhập lại thông tin học sinh...{RESET}")
+            ma_hs = input(f"{YELLOW} Nhập mã học sinh (ví dụ: hs001): {RESET}").strip()
+            name_input = input(f"{YELLOW} Nhập tên học sinh: {RESET}").strip()
+            if ma_hs and name_input:
+                overwrite = False
+                if ma_hs in database:
+                    existing_name = database[ma_hs]["name"]
+                    confirm = input(f"{YELLOW}⚠️ Mã học sinh '{ma_hs}' đã tồn tại (Tên: {existing_name}). Bạn có muốn cập nhật/ghi đè? (y/n): {RESET}").strip().lower()
+                    if confirm == 'y':
+                        overwrite = True
+                    else:
+                        print(f"{RED}[HỦY BỎ] Hủy đăng ký để tránh ghi đè dữ liệu.{RESET}\n")
+                        continue
+                
+                # Khởi động lại luồng quét và reset lại thời gian bắt đầu quét
+                print(f"{YELLOW}[*] Bắt đầu quét góc mặt. Vui lòng nhìn thẳng vào camera...{RESET}")
+                register_mode = True
+                register_step = "straight"
+                register_user_id = ma_hs
+                register_user_name = name_input
+                register_overwrite = overwrite
+                register_vectors = {}
+                register_stable_frames = 0
+                register_start_time = time.time()
+            else:
+                print(f"{RED}[HUỶ ĐĂNG KÝ] Thiếu thông tin mã học sinh hoặc tên học sinh. Huỷ bỏ.{RESET}\n")
+            continue
             
         # Lật ngang khung hình để giống hiệu ứng soi gương
         frame = cv2.flip(frame, 1)
@@ -474,6 +516,7 @@ def main():
                     register_overwrite = overwrite
                     register_vectors = {}
                     register_stable_frames = 0
+                    register_start_time = time.time()
                 else:
                     print(f"{RED}[HUỶ ĐĂNG KÝ] Thiếu thông tin mã học sinh hoặc tên học sinh. Huỷ bỏ.{RESET}\n")
             else:
