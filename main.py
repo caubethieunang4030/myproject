@@ -59,15 +59,16 @@ def normalize_vector(vec):
     return centered / eye_dist
 
 # Cấu hình liveness detection (xác thực chống giả mạo bằng ảnh tĩnh)
-LIVENESS_DURATION = 5.0        # Thời gian bắt buộc kiểm tra chuyển động (giây)
-LIVENESS_THRESHOLD = 0.08      # Ngưỡng biến thiên tối thiểu để tính là có chuyển động (nháy mắt hoặc mở miệng)
+LIVENESS_DURATION = 2.0        # Thời gian bắt buộc kiểm tra chuyển động (giây)
+LIVENESS_THRESHOLD = 0.05      # Ngưỡng biến thiên tối thiểu để tính là có chuyển động (nháy mắt hoặc mở miệng)
 
 def extract_liveness_features(face_landmarks):
     """
-    Trích xuất 3 đặc trưng động lực học cục bộ trên khuôn mặt (mắt và miệng).
+    Trích xuất 3 đặc trưng động lực học cục bộ trên khuôn mặt trong không gian 2D (mắt và miệng).
     Đã chia cho khoảng cách mắt (landmark 133-362) để chống di chuyển xa gần (scale-invariant).
+    Chỉ dùng tọa độ (x, y) để loại bỏ hoàn toàn nhiễu ước tính độ sâu z từ ảnh tĩnh.
     """
-    coords = np.array([[v.x, v.y, v.z] for v in face_landmarks.landmark])
+    coords = np.array([[v.x, v.y] for v in face_landmarks.landmark])
     dist = lambda p1, p2: np.linalg.norm(coords[p1] - coords[p2])
     
     # Khoảng cách giữa 2 khóe mắt trong (inner corners) để làm chuẩn tỉ lệ
@@ -247,6 +248,7 @@ def main():
     liveness_status = "idle"     # Trạng thái: "idle", "validating", "approved", "rejected"
     liveness_result_time = 0.0   # Lưu thời điểm hiển thị kết quả
     liveness_result_msg = ""     # Thông báo kết quả để hiển thị lên màn hình
+    lost_face_counter = 0        # Bộ đếm số khung hình mất dấu khuôn mặt để lọc nhiễu
     
     while True:
         ret, frame = cap.read()
@@ -327,57 +329,78 @@ def main():
                 else:
                     # Trạng thái đang xác thực chuyển động
                     if liveness_status == "validating":
-                        # Chống tráo người/mất mặt trong lúc validation
-                        if best_match_id != liveness_user:
-                            print(f"{RED}[HỦY BỎ] Mất dấu khuôn mặt hoặc đổi người trong lúc xác thực. Hủy phiên liveness.{RESET}")
+                        # Chỉ hủy ngay lập tức nếu phát hiện rõ ràng một người khác (không phải Unknown và không phải liveness_user)
+                        if best_match_id != "Unknown" and best_match_id != liveness_user:
+                            print(f"{RED}[HỦY BỎ] Phát hiện đổi người khác ({best_match_id}). Hủy phiên liveness.{RESET}")
                             liveness_status = "idle"
                             liveness_user = None
                             liveness_history = []
+                            lost_face_counter = 0
                             
                             color = (0, 0, 255)
                             label = "[X] - Unknown"
                         else:
-                            # Ghi nhận đặc trưng chuyển động hiện tại
-                            features = extract_liveness_features(face_landmarks)
-                            liveness_history.append(features)
-                            
-                            elapsed = current_time - liveness_start_time
-                            time_left = max(0.0, LIVENESS_DURATION - elapsed)
-                            
-                            color = (0, 165, 255)  # Màu cam (BGR)
-                            label = f"Xac minh chuyen dong... {best_match_name} ({time_left:.1f}s)"
-                            
-                            # Hiển thị mức độ chuyển động hiện tại lên giao diện
-                            if len(liveness_history) > 1:
-                                ranges = np.max(liveness_history, axis=0) - np.min(liveness_history, axis=0)
-                                max_range = np.max(ranges)
-                                bar_len = int(min(20, max_range * 100))
-                                progress_bar = "[" + "="*bar_len + " "*(20-bar_len) + "]"
-                                cv2.putText(frame, f"Motion level: {max_range:.4f} {progress_bar}", (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1, cv2.LINE_AA)
-                            
-                            # Khi đủ thời gian 5 giây
-                            if elapsed >= LIVENESS_DURATION:
-                                ranges = np.max(liveness_history, axis=0) - np.min(liveness_history, axis=0)
-                                max_range = np.max(ranges)
-                                print(f"[*] Kết thúc 5 giây liveness. Độ biến thiên lớn nhất: {max_range:.5f}")
+                            if best_match_id == liveness_user:
+                                # Nhận diện đúng học sinh, reset bộ đếm mất dấu
+                                lost_face_counter = 0
+                                features = extract_liveness_features(face_landmarks)
+                                liveness_history.append(features)
+                            else:
+                                # Nhận diện ra Unknown (tạm thời mất dấu), tăng bộ đếm
+                                lost_face_counter += 1
                                 
-                                if max_range >= LIVENESS_THRESHOLD:
-                                    # Thành công
-                                    ghi_nhan_cham_cong(liveness_user)
-                                    last_logged_time[liveness_user] = current_time
-                                    liveness_status = "approved"
-                                    liveness_result_time = current_time
-                                    liveness_result_msg = f"Chao {best_match_name}! (Thanh cong)"
-                                    print(f"{GREEN}[OK] Xác minh chuyển động thành công cho {best_match_name} | Motion: {max_range:.5f} (Dat){RESET}")
-                                else:
-                                    # Thất bại (Ảnh tĩnh hoặc không chuyển động)
-                                    liveness_status = "rejected"
-                                    liveness_result_time = current_time
-                                    liveness_result_msg = "CANH BAO: Gia mao / Anh tinh!"
-                                    print(f"{RED}[CANH BÁO] Phát hiện giả mạo bằng ảnh tĩnh cho {best_match_name} | Motion: {max_range:.5f} (Khong dat){RESET}")
-                                
+                            if lost_face_counter > 15:
+                                print(f"{RED}[HỦY BỎ] Mất dấu khuôn mặt quá lâu trong lúc xác thực. Hủy phiên liveness.{RESET}")
+                                liveness_status = "idle"
                                 liveness_user = None
                                 liveness_history = []
+                                lost_face_counter = 0
+                                
+                                color = (0, 0, 255)
+                                label = "[X] - Unknown"
+                            else:
+                                elapsed = current_time - liveness_start_time
+                                time_left = max(0.0, LIVENESS_DURATION - elapsed)
+                                
+                                color = (0, 165, 255)  # Màu cam (BGR)
+                                label = f"Xac minh chuyen dong... {best_match_name} ({time_left:.1f}s)"
+                                
+                                # Hiển thị mức độ chuyển động hiện tại lên giao diện
+                                if len(liveness_history) > 1:
+                                    ranges = np.max(liveness_history, axis=0) - np.min(liveness_history, axis=0)
+                                    max_range = np.max(ranges)
+                                    bar_len = int(min(20, max_range * 100))
+                                    progress_bar = "[" + "="*bar_len + " "*(20-bar_len) + "]"
+                                    cv2.putText(frame, f"Motion level: {max_range:.4f} {progress_bar}", (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1, cv2.LINE_AA)
+                                
+                                # Khi đủ thời gian (2 giây)
+                                if elapsed >= LIVENESS_DURATION:
+                                    if len(liveness_history) > 1:
+                                        ranges = np.max(liveness_history, axis=0) - np.min(liveness_history, axis=0)
+                                        max_range = np.max(ranges)
+                                    else:
+                                        max_range = 0.0
+                                        
+                                    print(f"[*] Kết thúc {LIVENESS_DURATION} giây liveness. Độ biến thiên lớn nhất: {max_range:.5f}")
+                                    
+                                    if max_range >= LIVENESS_THRESHOLD:
+                                        # Thành công
+                                        ghi_nhan_cham_cong(liveness_user)
+                                        last_logged_time[liveness_user] = current_time
+                                        liveness_status = "approved"
+                                        liveness_result_time = current_time
+                                        liveness_result_msg = f"Chao {best_match_name}! (Thanh cong)"
+                                        print(f"{GREEN}[OK] Xác minh chuyển động thành công cho {best_match_name} | Motion: {max_range:.5f} (Dat){RESET}")
+                                    else:
+                                        # Thất bại (Ảnh tĩnh hoặc không chuyển động)
+                                        liveness_status = "rejected"
+                                        liveness_result_time = current_time
+                                        liveness_result_msg = "CANH BAO: Gia mao / Anh tinh!"
+                                        print(f"{RED}[CANH BÁO] Phát hiện giả mạo bằng ảnh tĩnh cho {best_match_name} | Motion: {max_range:.5f} (Khong dat){RESET}")
+                                    
+                                    liveness_user = None
+                                    liveness_history = []
+                                    lost_face_counter = 0
                     
                     # Trạng thái rảnh (đang chờ kích hoạt xác thực)
                     elif liveness_status == "idle":
@@ -402,6 +425,7 @@ def main():
                                     liveness_user = best_match_id
                                     liveness_start_time = current_time
                                     liveness_history = [extract_liveness_features(face_landmarks)]
+                                    lost_face_counter = 0
                                     
                                     color = (0, 165, 255)
                                     label = f"Xac minh chuyen dong... {best_match_name} ({LIVENESS_DURATION:.1f}s)"
@@ -421,14 +445,17 @@ def main():
                 cv2.rectangle(frame, (x1, y1 - 25), (x2, y1), color, -1)
                 cv2.putText(frame, label, (x1 + 5, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
         else:
-            # Không phát hiện khuôn mặt nào, reset đếm liên tiếp và hủy phiên liveness đang validating
+            # Không phát hiện khuôn mặt nào
             last_detected_name = None
             consecutive_count = 0
             if liveness_status == "validating":
-                print(f"{RED}[HỦY BỎ] Không phát hiện khuôn mặt. Hủy phiên liveness.{RESET}")
-                liveness_status = "idle"
-                liveness_user = None
-                liveness_history = []
+                lost_face_counter += 1
+                if lost_face_counter > 15:
+                    print(f"{RED}[HỦY BỎ] Không phát hiện khuôn mặt quá lâu. Hủy phiên liveness.{RESET}")
+                    liveness_status = "idle"
+                    liveness_user = None
+                    liveness_history = []
+                    lost_face_counter = 0
         
         # 4. Hiển thị màn hình camera
         cv2.imshow('Face Recognition Demo', frame)
