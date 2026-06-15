@@ -58,6 +58,34 @@ def normalize_vector(vec):
         return centered
     return centered / eye_dist
 
+# Cấu hình liveness detection (xác thực chống giả mạo bằng ảnh tĩnh)
+LIVENESS_DURATION = 5.0        # Thời gian bắt buộc kiểm tra chuyển động (giây)
+LIVENESS_THRESHOLD = 0.04      # Ngưỡng biến thiên tối thiểu để tính là có chuyển động
+
+def extract_liveness_features(face_landmarks):
+    """
+    Trích xuất 7 đặc trưng khoảng cách tỉ lệ trên khuôn mặt.
+    Đã chia cho khoảng cách mắt (landmark 133-362) để chống di chuyển xa gần (scale-invariant).
+    """
+    coords = np.array([[v.x, v.y, v.z] for v in face_landmarks.landmark])
+    dist = lambda p1, p2: np.linalg.norm(coords[p1] - coords[p2])
+    
+    # Khoảng cách giữa 2 khóe mắt trong (inner corners) để làm chuẩn tỉ lệ
+    eye_dist = dist(133, 362)
+    if eye_dist == 0:
+        return [0.0] * 7
+        
+    features = [
+        dist(159, 145) / eye_dist,  # Độ mở mắt trái (mí trên - mí dưới)
+        dist(386, 374) / eye_dist,  # Độ mở mắt phải (mí trên - mí dưới)
+        dist(13, 14) / eye_dist,    # Độ mở miệng (môi trên - môi dưới)
+        dist(61, 291) / eye_dist,   # Độ rộng miệng (khóe trái - khóe phải)
+        dist(105, 159) / eye_dist,  # Khoảng cách chân mày trái đến mắt trái
+        dist(334, 386) / eye_dist,  # Khoảng cách chân mày phải đến mắt phải
+        dist(4, 0) / eye_dist       # Khoảng cách từ chóp mũi đến môi trên
+    ]
+    return features
+
 def load_database():
     """
     Tải cơ sở dữ liệu khuôn mặt từ bảng vectormathocsinh của SQL Server.
@@ -216,6 +244,14 @@ def main():
     last_detected_name = None
     consecutive_count = 0
     
+    # Quản lý xác thực liveness (chống giả mạo)
+    liveness_user = None         # ID học sinh đang được xác thực liveness
+    liveness_start_time = 0.0    # Thời điểm bắt đầu xác thực liveness
+    liveness_history = []        # Lưu lịch sử các vector đặc trưng trong 5 giây
+    liveness_status = "idle"     # Trạng thái: "idle", "validating", "approved", "rejected"
+    liveness_result_time = 0.0   # Lưu thời điểm hiển thị kết quả
+    liveness_result_msg = ""     # Thông báo kết quả để hiển thị lên màn hình
+    
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -278,43 +314,109 @@ def main():
                             best_match_id = ma_hs
                             best_match_name = info["name"]
                 
-                # 3. Xử lý hiển thị UI và Ghi nhật ký chấm công
+                # 3. Xử lý hiển thị UI và Ghi nhật ký chấm công (Tích hợp Liveness Detection)
                 current_time = time.time()
                 
-                if best_match_id != "Unknown":
-                    # Cập nhật số khung hình nhận dạng liên tiếp
-                    if best_match_id == last_detected_name:
-                        consecutive_count += 1
-                    else:
-                        last_detected_name = best_match_id
-                        consecutive_count = 1
-                    
-                    if consecutive_count >= 3:
-                        # Đạt điều kiện 3 khung hình liên tiếp, kiểm tra cooldown
-                        in_cooldown = (best_match_id in last_logged_time) and (current_time - last_logged_time[best_match_id] <= LOG_COOLDOWN_SECONDS)
-                        
-                        if not in_cooldown:
-                            # Gọi ghi nhận check-in SQL Server
-                            ghi_nhan_cham_cong(best_match_id)
-                            last_logged_time[best_match_id] = current_time
-                            print(f"{GREEN}[OK] Chấm công thành công: {best_match_name} ({best_match_id}) | Độ lệch: {min_dist:.5f}{RESET}")
-                            
-                            color = (0, 255, 0) # Màu xanh lá (BGR)
-                            label = f"Chao {best_match_name}! (Thanh cong)"
-                        else:
-                            # Trong thời gian cooldown, chỉ hiển thị "Chào [Tên]"
-                            color = (0, 255, 0) # Màu xanh lá (BGR)
-                            label = f"Chao {best_match_name}"
-                    else:
-                        # Đang nhận diện (chưa đủ 3 khung hình)
-                        color = (0, 165, 255) # Màu cam (BGR)
-                        label = f"Nhan dang... {best_match_name} ({consecutive_count}/3)"
+                # Kiểm tra và xử lý trạng thái hiển thị kết quả cũ
+                if liveness_status in ["approved", "rejected"]:
+                    if current_time - liveness_result_time >= 2.0:
+                        liveness_status = "idle"
+                
+                if liveness_status == "approved":
+                    color = (0, 255, 0)  # Xanh lá (BGR)
+                    label = liveness_result_msg
+                elif liveness_status == "rejected":
+                    color = (0, 0, 255)  # Đỏ (BGR)
+                    label = liveness_result_msg
                 else:
-                    # Không khớp
-                    last_detected_name = None
-                    consecutive_count = 0
-                    color = (0, 0, 255) # Màu đỏ (BGR)
-                    label = f"[X] - Unknown"
+                    # Trạng thái đang xác thực chuyển động
+                    if liveness_status == "validating":
+                        # Chống tráo người/mất mặt trong lúc validation
+                        if best_match_id != liveness_user:
+                            print(f"{RED}[HỦY BỎ] Mất dấu khuôn mặt hoặc đổi người trong lúc xác thực. Hủy phiên liveness.{RESET}")
+                            liveness_status = "idle"
+                            liveness_user = None
+                            liveness_history = []
+                            
+                            color = (0, 0, 255)
+                            label = "[X] - Unknown"
+                        else:
+                            # Ghi nhận đặc trưng chuyển động hiện tại
+                            features = extract_liveness_features(face_landmarks)
+                            liveness_history.append(features)
+                            
+                            elapsed = current_time - liveness_start_time
+                            time_left = max(0.0, LIVENESS_DURATION - elapsed)
+                            
+                            color = (0, 165, 255)  # Màu cam (BGR)
+                            label = f"Xac minh chuyen dong... {best_match_name} ({time_left:.1f}s)"
+                            
+                            # Hiển thị mức độ chuyển động hiện tại lên giao diện
+                            if len(liveness_history) > 1:
+                                ranges = np.max(liveness_history, axis=0) - np.min(liveness_history, axis=0)
+                                max_range = np.max(ranges)
+                                bar_len = int(min(20, max_range * 100))
+                                progress_bar = "[" + "="*bar_len + " "*(20-bar_len) + "]"
+                                cv2.putText(frame, f"Motion level: {max_range:.4f} {progress_bar}", (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1, cv2.LINE_AA)
+                            
+                            # Khi đủ thời gian 5 giây
+                            if elapsed >= LIVENESS_DURATION:
+                                ranges = np.max(liveness_history, axis=0) - np.min(liveness_history, axis=0)
+                                max_range = np.max(ranges)
+                                print(f"[*] Kết thúc 5 giây liveness. Độ biến thiên lớn nhất: {max_range:.5f}")
+                                
+                                if max_range >= LIVENESS_THRESHOLD:
+                                    # Thành công
+                                    ghi_nhan_cham_cong(liveness_user)
+                                    last_logged_time[liveness_user] = current_time
+                                    liveness_status = "approved"
+                                    liveness_result_time = current_time
+                                    liveness_result_msg = f"Chao {best_match_name}! (Thanh cong)"
+                                    print(f"{GREEN}[OK] Xác minh chuyển động thành công cho {best_match_name} | Motion: {max_range:.5f} (Dat){RESET}")
+                                else:
+                                    # Thất bại (Ảnh tĩnh hoặc không chuyển động)
+                                    liveness_status = "rejected"
+                                    liveness_result_time = current_time
+                                    liveness_result_msg = "CANH BAO: Gia mao / Anh tinh!"
+                                    print(f"{RED}[CANH BÁO] Phát hiện giả mạo bằng ảnh tĩnh cho {best_match_name} | Motion: {max_range:.5f} (Khong dat){RESET}")
+                                
+                                liveness_user = None
+                                liveness_history = []
+                    
+                    # Trạng thái rảnh (đang chờ kích hoạt xác thực)
+                    elif liveness_status == "idle":
+                        if best_match_id != "Unknown":
+                            # Cập nhật đếm liên tiếp chống nhiễu
+                            if best_match_id == last_detected_name:
+                                consecutive_count += 1
+                            else:
+                                last_detected_name = best_match_id
+                                consecutive_count = 1
+                            
+                            if consecutive_count >= 3:
+                                in_cooldown = (best_match_id in last_logged_time) and (current_time - last_logged_time[best_match_id] <= LOG_COOLDOWN_SECONDS)
+                                if in_cooldown:
+                                    # Trong thời gian cooldown chỉ hiện chào thông thường
+                                    color = (0, 255, 0)
+                                    label = f"Chao {best_match_name}"
+                                else:
+                                    # Kích hoạt xác thực chuyển động
+                                    print(f"{YELLOW}[*] Bắt đầu kiểm tra chuyển động cho: {best_match_name} (Nháy mắt hoặc mấp máy môi)...{RESET}")
+                                    liveness_status = "validating"
+                                    liveness_user = best_match_id
+                                    liveness_start_time = current_time
+                                    liveness_history = [extract_liveness_features(face_landmarks)]
+                                    
+                                    color = (0, 165, 255)
+                                    label = f"Xac minh chuyen dong... {best_match_name} ({LIVENESS_DURATION:.1f}s)"
+                            else:
+                                color = (0, 165, 255)
+                                label = f"Nhan dang... {best_match_name} ({consecutive_count}/3)"
+                        else:
+                            last_detected_name = None
+                            consecutive_count = 0
+                            color = (0, 0, 255)
+                            label = "[X] - Unknown"
                 
                 # Vẽ bounding box
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
@@ -323,9 +425,14 @@ def main():
                 cv2.rectangle(frame, (x1, y1 - 25), (x2, y1), color, -1)
                 cv2.putText(frame, label, (x1 + 5, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
         else:
-            # Không phát hiện khuôn mặt nào, reset đếm liên tiếp
+            # Không phát hiện khuôn mặt nào, reset đếm liên tiếp và hủy phiên liveness đang validating
             last_detected_name = None
             consecutive_count = 0
+            if liveness_status == "validating":
+                print(f"{RED}[HỦY BỎ] Không phát hiện khuôn mặt. Hủy phiên liveness.{RESET}")
+                liveness_status = "idle"
+                liveness_user = None
+                liveness_history = []
         
         # 4. Hiển thị màn hình camera
         cv2.imshow('Face Recognition Demo', frame)
