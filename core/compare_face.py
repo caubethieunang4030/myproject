@@ -2,11 +2,11 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import os
-import pandas as pd
 from datetime import datetime
 
 
 mp_face_mesh = mp.solutions.face_mesh
+
 face_mesh = mp_face_mesh.FaceMesh(
     static_image_mode=True, 
     max_num_faces=1, 
@@ -16,7 +16,6 @@ face_mesh = mp_face_mesh.FaceMesh(
 
 
 DB_PATH = "employee_db"
-LOG_EXCEL = "cham_cong.xlsx"
 
 
 if not os.path.exists(DB_PATH):
@@ -68,32 +67,6 @@ def identify_person(target_vec, threshold=0.06):
                 
     return best_match, min_dist
 
-def save_to_excel(name_info, score):
-
-    parts = name_info.split('_')
-    msnv = parts[0] if len(parts) > 1 else "N/A"
-    ten = parts[1] if len(parts) > 1 else name_info
-    
-    new_record = {
-        'Ngày Giờ': [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-        'MSNV': [msnv],
-        'Tên Nhân Viên': [ten],
-        'Sai lệch': [round(score, 5)]
-    }
-    df_new = pd.DataFrame(new_record)
-    
-    try:
-        if not os.path.exists(LOG_EXCEL):
-            df_new.to_excel(LOG_EXCEL, index=False)
-        else:
-            df_old = pd.read_excel(LOG_EXCEL)
-            df_final = pd.concat([df_old, df_new], ignore_index=True)
-            df_final.to_excel(LOG_EXCEL, index=False)
-        return True
-    except Exception as e:
-        print(f"Lỗi ghi Excel: {e}")
-        return False
-
 if __name__ == "__main__":
   
     img_mau = "anhsontungso1.jpeg"
@@ -119,8 +92,6 @@ if __name__ == "__main__":
         if name_id not in ["Unknown", "Empty_DB"]:
             print(f"NHẬN DIỆN THÀNH CÔNG: {name_id}")
             print(f"Độ sai lệch: {score:.5f}")
-            if save_to_excel(name_id, score):
-                print(f"Đã ghi nhận vào file {LOG_EXCEL}")
         else:
             msg = "DATABASE CHƯA CÓ DỮ LIỆU" if name_id == "Empty_DB" else "KHÔNG KHỚP NHÂN VIÊN"
             print(f"{msg} (Sai lệch thấp nhất: {score:.5f})")
