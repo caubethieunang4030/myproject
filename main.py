@@ -56,8 +56,7 @@ def get_encryption_suite():
             key = new_key
             print(f"🔑 Đã tự động tạo khóa mã hóa sinh trắc học và lưu vào .env")
         except Exception as e:
-            key = 'static_fallback_key_32_bytes_long_123='
-            print(f"⚠️ Không thể ghi khóa mã hóa vào .env: {e}. Sử dụng khóa dự phòng.")
+            raise RuntimeError(f"Không thể khởi tạo và ghi ENCRYPTION_KEY vào .env: {e}")
     return Fernet(key.encode() if isinstance(key, str) else key)
 
 cipher_suite = get_encryption_suite()
@@ -135,6 +134,7 @@ def load_database(w=640, h=480):
                     data = json.loads(decrypted_str)
                 except Exception:
                     # Tương thích ngược: nếu giải mã lỗi, đọc thẳng dạng plain text JSON
+                    print(f"⚠️ {RED}[SECURITY] HS {ma_hs}: Đọc vector dạng plaintext - Có thể dữ liệu cũ chưa mã hóa hoặc đã bị sửa đổi!{RESET}")
                     data = json.loads(facevector_str)
                 
                 vectors = []
@@ -249,27 +249,71 @@ def save_offline_log(ma_hs, loai_chamcong):
 def sync_offline_queue():
     """
     Hàm luồng chạy nền tự động đồng bộ hàng đợi ngoại tuyến lên SQL Server khi có mạng trở lại.
+    Tránh race condition bằng cách đổi tên file sang file tạm trong lock trước khi đồng bộ.
     """
+    SYNC_TEMP_FILE = "offline_queue_sync.json"
     while True:
         time.sleep(10) # Kiểm tra mỗi 10 giây
         
-        if not os.path.exists(OFFLINE_QUEUE_FILE):
+        if not os.path.exists(OFFLINE_QUEUE_FILE) and not os.path.exists(SYNC_TEMP_FILE):
             continue
             
+        has_records = False
         with offline_lock:
             try:
-                with open(OFFLINE_QUEUE_FILE, 'r', encoding='utf-8') as f:
-                    records = json.load(f)
+                # Nếu file tạm cũ vẫn tồn tại từ phiên chạy trước (ví dụ do chương trình crash đột ngột), merge lại vào file chính
+                if os.path.exists(SYNC_TEMP_FILE):
+                    s_rec, o_rec = [], []
+                    try:
+                        with open(SYNC_TEMP_FILE, 'r', encoding='utf-8') as sf:
+                            s_rec = json.load(sf)
+                    except Exception:
+                        s_rec = []
+                    try:
+                        with open(OFFLINE_QUEUE_FILE, 'r', encoding='utf-8') as of:
+                            o_rec = json.load(of)
+                    except Exception:
+                        o_rec = []
+                    
+                    merged = o_rec + s_rec
+                    if merged:
+                        with open(OFFLINE_QUEUE_FILE, 'w', encoding='utf-8') as of:
+                            json.dump(merged, of, ensure_ascii=False, indent=4)
+                    
+                    try:
+                        os.remove(SYNC_TEMP_FILE)
+                    except Exception:
+                        pass
+                
+                if os.path.exists(OFFLINE_QUEUE_FILE):
+                    os.rename(OFFLINE_QUEUE_FILE, SYNC_TEMP_FILE)
+                    has_records = True
+            except Exception as e:
+                print(f"Lỗi khi đổi tên file tạm đồng bộ: {e}")
+                has_records = False
+                
+        if not has_records:
+            continue
+            
+        # Đọc dữ liệu từ file tạm (không cần lock vì file tạm này không bị thread chính ghi đè)
+        records = []
+        try:
+            with open(SYNC_TEMP_FILE, 'r', encoding='utf-8') as f:
+                records = json.load(f)
+        except Exception:
+            try:
+                os.remove(SYNC_TEMP_FILE)
             except Exception:
-                continue
-                
-            if not records:
-                try:
-                    os.remove(OFFLINE_QUEUE_FILE)
-                except Exception:
-                    pass
-                continue
-                
+                pass
+            continue
+            
+        if not records:
+            try:
+                os.remove(SYNC_TEMP_FILE)
+            except Exception:
+                pass
+            continue
+            
         # Thử kết nối tới SQL Server
         conn = None
         try:
@@ -292,13 +336,30 @@ def sync_offline_queue():
             conn.commit()
             print(f"🚀 {GREEN}[ĐỒNG BỘ] Đồng bộ thành công {success_count}/{len(records)} bản ghi.{RESET}")
             
-            # Xóa file offline_queue.json sau khi đồng bộ thành công
-            with offline_lock:
-                if os.path.exists(OFFLINE_QUEUE_FILE):
-                    os.remove(OFFLINE_QUEUE_FILE)
+            # Xóa file tạm sau khi đồng bộ thành công
+            try:
+                os.remove(SYNC_TEMP_FILE)
+            except Exception:
+                pass
         except Exception as e:
-            # Vẫn mất kết nối, giữ nguyên dữ liệu ngoại tuyến chờ chu kỳ sau
-            pass
+            # Gặp lỗi DB, merge ngược dữ liệu từ file tạm vào file chính dưới lock để bảo toàn dữ liệu
+            with offline_lock:
+                try:
+                    main_records = []
+                    if os.path.exists(OFFLINE_QUEUE_FILE):
+                        try:
+                            with open(OFFLINE_QUEUE_FILE, 'r', encoding='utf-8') as f:
+                                main_records = json.load(f)
+                        except Exception:
+                            main_records = []
+                    
+                    merged_records = records + main_records
+                    with open(OFFLINE_QUEUE_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(merged_records, f, ensure_ascii=False, indent=4)
+                    
+                    os.remove(SYNC_TEMP_FILE)
+                except Exception as ex:
+                    print(f"Lỗi khi hoàn tác merge records ngoại tuyến: {ex}")
         finally:
             if conn:
                 conn.close()
@@ -399,6 +460,7 @@ def main():
     # Chế độ chấm công hiện tại (mặc định tự động theo giờ hệ thống)
     current_hour = datetime.now().hour
     active_mode = "VAO" if current_hour < 12 else "RA"
+    manual_override = False
     
     register_prompt_active = False
 
@@ -440,6 +502,8 @@ def main():
             print(f"{RED}[LỖI] Đăng ký lỗi: {e}{RESET}")
         finally:
             register_prompt_active = False
+            if not register_mode:
+                register_step = "idle"
 
     while True:
         ret, frame = cap.read()
@@ -448,6 +512,10 @@ def main():
             break
             
         current_time = time.time()
+        
+        # Tự động cập nhật chế độ chấm công theo thời gian thực (nếu không có override thủ công)
+        if not manual_override:
+            active_mode = "VAO" if datetime.now().hour < 12 else "RA"
         
         # Kiểm tra timeout 20 giây trong chế độ đăng ký góc mặt
         if register_mode and (current_time - register_start_time > 20.0):
@@ -728,12 +796,14 @@ def main():
         # Phím nóng chuyển sang chế độ chấm công VÀO
         elif key == ord('i'):
             active_mode = "VAO"
-            print(f"🔄 {CYAN}[CHẾ ĐỘ] Đã chuyển sang chấm công: VÀO (Check-In){RESET}")
+            manual_override = True
+            print(f"🔄 {CYAN}[CHẾ ĐỘ] Đã chuyển sang chấm công: VÀO (Check-In) [Override]{RESET}")
             
         # Phím nóng chuyển sang chế độ chấm công RA
         elif key == ord('o'):
             active_mode = "RA"
-            print(f"🔄 {CYAN}[CHẾ ĐỘ] Đã chuyển sang chấm công: RA (Check-Out){RESET}")
+            manual_override = True
+            print(f"🔄 {CYAN}[CHẾ ĐỘ] Đã chuyển sang chấm công: RA (Check-Out) [Override]{RESET}")
             
         # Nhấn phím 'c' để hủy đăng ký khi đang trong chế độ đăng ký
         elif key == ord('c'):
