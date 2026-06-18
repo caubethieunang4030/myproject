@@ -41,3 +41,4 @@ tzdata==2026.2
 urllib3==2.6.3
 pymssql==2.3.13
 python-dotenv==1.2.2
+cryptography==49.0.0
