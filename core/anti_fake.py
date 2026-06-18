@@ -2,7 +2,7 @@ import numpy as np
 def normalize_vector(vec, w=640, h=480):
     """
     Chuẩn hóa vector landmarks khuôn mặt để đạt được Translation, Scale & Aspect Ratio Invariance.
-    Dịch chuyển tâm về gốc tọa độ (0,0,0) và chia cho khoảng cách giữa hai mắt (inner corners) trong không gian pixel.
+    Dịch chuyển tâm về gốc tọa độ (0,0,0) và chuẩn hóa L2 về vectơ đơn vị (Unit Vector) phẳng 1434 chiều trong không gian pixel.
     """
     vec_pixel = vec.copy()
     vec_pixel[:, 0] *= w
@@ -10,11 +10,11 @@ def normalize_vector(vec, w=640, h=480):
     vec_pixel[:, 2] *= w  # Trục Z tỷ lệ theo chiều rộng để giữ nguyên tỷ lệ không gian 3D
     
     centered = vec_pixel - np.mean(vec_pixel, axis=0)
-    # Khoảng cách giữa 2 khóe mắt trong (landmark 133 và 362)
-    eye_dist = np.linalg.norm(vec_pixel[133] - vec_pixel[362])
-    if eye_dist == 0:
-        return centered
-    return centered / eye_dist
+    flat = centered.flatten()
+    norm = np.linalg.norm(flat)
+    if norm == 0:
+        return flat
+    return flat / norm
 
 # Cấu hình liveness detection (xác thực chống giả mạo bằng ảnh tĩnh)
 LIVENESS_DURATION = 2.0        # Thời gian bắt buộc kiểm tra chuyển động (giây)

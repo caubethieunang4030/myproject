@@ -9,6 +9,8 @@ import json
 import pymssql
 from dotenv import load_dotenv
 import random
+import threading
+from cryptography.fernet import Fernet
 from core.anti_fake import normalize_vector, extract_liveness_features
 load_dotenv()
 
@@ -38,7 +40,62 @@ db_config = {
     'database': os.getenv('DB_DATABASE', 'chamcongdatabase')
 }
 
-THRESHOLD = 0.15  # Ngưỡng nhận diện khuôn mặt (tăng lên 0.15 để tăng tỷ lệ nhận dạng học sinh thật)
+# Hàm khởi tạo và lấy công cụ mã hóa AES-256 (Fernet)
+def get_encryption_suite():
+    key = os.getenv("ENCRYPTION_KEY")
+    if not key:
+        new_key = Fernet.generate_key().decode()
+        env_path = '.env'
+        try:
+            with open(env_path, 'a') as f:
+                f.write(f"\nENCRYPTION_KEY={new_key}\n")
+            os.environ["ENCRYPTION_KEY"] = new_key
+            key = new_key
+            print(f"🔑 Đã tự động tạo khóa mã hóa sinh trắc học và lưu vào .env")
+        except Exception as e:
+            key = 'static_fallback_key_32_bytes_long_123='
+            print(f"⚠️ Không thể ghi khóa mã hóa vào .env: {e}. Sử dụng khóa dự phòng.")
+    return Fernet(key.encode() if isinstance(key, str) else key)
+
+cipher_suite = get_encryption_suite()
+
+# Ngưỡng khoảng cách Cosine Distance (độ lệch tối đa 2.5%, tương đương tương đồng CosSim >= 97.5%)
+THRESHOLD = 0.025  
+
+# Cấu hình hàng đợi ngoại tuyến (Offline Queue)
+OFFLINE_QUEUE_FILE = "offline_queue.json"
+offline_lock = threading.Lock()
+
+def upgrade_db_schema():
+    """
+    Tự động nâng cấp bảng thongtinchamcong để thêm cột loai_chamcong nếu chưa tồn tại.
+    """
+    conn = None
+    try:
+        conn = pymssql.connect(
+            server=db_config['server'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database']
+        )
+        cursor = conn.cursor()
+        cursor.execute("""
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID('thongtinchamcong') AND name = 'loai_chamcong'
+            )
+            BEGIN
+                ALTER TABLE thongtinchamcong ADD loai_chamcong NVARCHAR(10) DEFAULT 'VAO';
+            END
+        """)
+        conn.commit()
+        print(f"🚀 {GREEN}[OK] Đã kiểm tra và đồng bộ cấu trúc bảng thongtinchamcong (cột loai_chamcong).{RESET}")
+    except Exception as e:
+        print(f"⚠️ {YELLOW}[CẢNH BÁO] Không thể nâng cấp tự động schema DB: {e}.{RESET}")
+    finally:
+        if conn:
+            conn.close()
 
 # Quản lý cooldown ghi log chấm công (15 phút = 900 giây)
 LOG_COOLDOWN_SECONDS = 900
@@ -69,7 +126,14 @@ def load_database(w=640, h=480):
         for row in rows:
             ma_hs, ten_hs, facevector_str = row
             try:
-                data = json.loads(facevector_str)
+                # Giải mã AES-256 dữ liệu sinh trắc học
+                try:
+                    decrypted_str = cipher_suite.decrypt(facevector_str.encode()).decode()
+                    data = json.loads(decrypted_str)
+                except Exception:
+                    # Tương thích ngược: nếu giải mã lỗi, đọc thẳng dạng plain text JSON
+                    data = json.loads(facevector_str)
+                
                 vectors = []
                 if isinstance(data, dict):
                     # Thiết kế mới: chứa các góc xoay đầu khác nhau
@@ -100,6 +164,9 @@ def load_database(w=640, h=480):
     return database
 
 def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector, overwrite=False):
+    """
+    Lưu thông tin học sinh và mảng vector mẫu đã mã hóa AES-256 vào SQL Server.
+    """
     conn = None
     try:
         conn = pymssql.connect(
@@ -111,8 +178,9 @@ def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector, overwrite=False):
         )
         cursor = conn.cursor()
         
-        # chuyển mảng vector số thực thành chuỗi text json sạch để lưu vào nvarchar(max)
+        # chuyển mảng vector số thực thành chuỗi text json sạch và mã hóa bảo mật sinh trắc
         chuoi_vector = json.dumps(mang_vector)
+        chuoi_vector_encrypted = cipher_suite.encrypt(chuoi_vector.encode()).decode()
         
         # Kiểm tra xem mã học sinh đã tồn tại trong DB chưa
         cursor.execute("select count(*) from vectormathocsinh where mahocsinh = %s", (ma_hs,))
@@ -129,7 +197,7 @@ def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector, overwrite=False):
                 set tenhocsinh = %s, facevector = %s 
                 where mahocsinh = %s
             """
-            cursor.execute(sql_query, (ten_hs, chuoi_vector, ma_hs))
+            cursor.execute(sql_query, (ten_hs, chuoi_vector_encrypted, ma_hs))
             conn.commit()
             print(f"🚀 đã cập nhật thành công vector cho học sinh: {ten_hs}")
             return True
@@ -139,7 +207,7 @@ def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector, overwrite=False):
                 insert into vectormathocsinh (mahocsinh, tenhocsinh, facevector) 
                 values (%s, %s, %s)
             """
-            cursor.execute(sql_query, (ma_hs, ten_hs, chuoi_vector))
+            cursor.execute(sql_query, (ma_hs, ten_hs, chuoi_vector_encrypted))
             conn.commit()
             print(f"🚀 đã lưu thành công vector cho học sinh: {ten_hs}")
             return True
@@ -150,9 +218,92 @@ def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector, overwrite=False):
         if conn:
             conn.close()
 
-def ghi_nhan_cham_cong(ma_hs):
+def save_offline_log(ma_hs, loai_chamcong):
     """
-    Ghi nhận check-in vào bảng thongtinchamcong của SQL Server.
+    Lưu log điểm danh ngoại tuyến vào file JSON cục bộ khi mất kết nối DB.
+    """
+    record = {
+        "mahocsinh": ma_hs,
+        "loai_chamcong": loai_chamcong,
+        "thoigian": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    with offline_lock:
+        data = []
+        if os.path.exists(OFFLINE_QUEUE_FILE):
+            try:
+                with open(OFFLINE_QUEUE_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception:
+                data = []
+        data.append(record)
+        try:
+            with open(OFFLINE_QUEUE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+            print(f"⚠️ {YELLOW}[OFFLINE] Đã lưu điểm danh ngoại tuyến cho {ma_hs} ({loai_chamcong}) vào file local.{RESET}")
+        except Exception as e:
+            print(f"❌ Không thể lưu file offline: {e}")
+
+def sync_offline_queue():
+    """
+    Hàm luồng chạy nền tự động đồng bộ hàng đợi ngoại tuyến lên SQL Server khi có mạng trở lại.
+    """
+    while True:
+        time.sleep(10) # Kiểm tra mỗi 10 giây
+        
+        if not os.path.exists(OFFLINE_QUEUE_FILE):
+            continue
+            
+        with offline_lock:
+            try:
+                with open(OFFLINE_QUEUE_FILE, 'r', encoding='utf-8') as f:
+                    records = json.load(f)
+            except Exception:
+                continue
+                
+            if not records:
+                try:
+                    os.remove(OFFLINE_QUEUE_FILE)
+                except Exception:
+                    pass
+                continue
+                
+        # Thử kết nối tới SQL Server
+        conn = None
+        try:
+            conn = pymssql.connect(
+                server=db_config['server'],
+                port=db_config['port'],
+                user=db_config['user'],
+                password=db_config['password'],
+                database=db_config['database']
+            )
+            cursor = conn.cursor()
+            print(f"📡 {GREEN}[ĐỒNG BỘ] Đã khôi phục kết nối database. Đang đồng bộ {len(records)} log ngoại tuyến...{RESET}")
+            
+            success_count = 0
+            for record in records:
+                sql_query = "insert into thongtinchamcong (mahocsinh, loai_chamcong, thoigianquet) values (%s, %s, %s)"
+                cursor.execute(sql_query, (record["mahocsinh"], record["loai_chamcong"], record["thoigian"]))
+                success_count += 1
+                
+            conn.commit()
+            print(f"🚀 {GREEN}[ĐỒNG BỘ] Đồng bộ thành công {success_count}/{len(records)} bản ghi.{RESET}")
+            
+            # Xóa file offline_queue.json sau khi đồng bộ thành công
+            with offline_lock:
+                if os.path.exists(OFFLINE_QUEUE_FILE):
+                    os.remove(OFFLINE_QUEUE_FILE)
+        except Exception as e:
+            # Vẫn mất kết nối, giữ nguyên dữ liệu ngoại tuyến chờ chu kỳ sau
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+def ghi_nhan_cham_cong(ma_hs, loai_chamcong="VAO"):
+    """
+    Ghi nhận check-in/out vào bảng thongtinchamcong của SQL Server.
+    Nếu mất kết nối, tự động lưu ngoại tuyến.
     """
     conn = None
     try:
@@ -165,15 +316,15 @@ def ghi_nhan_cham_cong(ma_hs):
         )
         cursor = conn.cursor()
         
-        # câu lệnh sql viết thường toàn bộ tên bảng và tên cột
-        sql_query = "insert into thongtinchamcong (mahocsinh) values (%s)"
-        
-        cursor.execute(sql_query, (ma_hs,))
+        # Câu lệnh SQL viết thường toàn bộ tên bảng và tên cột, chèn thêm loai_chamcong
+        sql_query = "insert into thongtinchamcong (mahocsinh, loai_chamcong) values (%s, %s)"
+        cursor.execute(sql_query, (ma_hs, loai_chamcong))
         conn.commit()
-        print(f"điểm danh thành công cho mã học sinh: {ma_hs}")
+        print(f"✅ {GREEN}Điểm danh ({loai_chamcong}) thành công cho học sinh: {ma_hs}{RESET}")
         return True
     except Exception as e:
-        print(f"lỗi khi ghi nhận chấm công: {e}")
+        print(f"⚠️ {RED}Lỗi khi kết nối SQL Server: {e}. Tiến hành lưu log ngoại tuyến...{RESET}")
+        save_offline_log(ma_hs, loai_chamcong)
         return False
     finally:
         if conn:
@@ -183,6 +334,13 @@ def main():
     print(f"\n{CYAN}=================================================={RESET}")
     print(f"{CYAN}{BOLD}    HỆ THỐNG CHẤM CÔNG WEBCAM DEMO     {RESET}")
     print(f"{CYAN}=================================================={RESET}")
+    
+    # Tự động đồng bộ nâng cấp schema database
+    upgrade_db_schema()
+    
+    # Khởi động luồng chạy nền đồng bộ chấm công ngoại tuyến
+    sync_thread = threading.Thread(target=sync_offline_queue, daemon=True)
+    sync_thread.start()
     
     # Mở camera của laptop trước để lấy thông số w, h
     print(f"\n[*] Đang khởi động camera...")
@@ -208,7 +366,9 @@ def main():
     
     print(f"{YELLOW}>>> HƯỚNG DẪN ĐIỀU KHIỂN CAM:{RESET}")
     print(f"  - Nhấn phím {BOLD}'q'{RESET} trên cửa sổ camera để {BOLD}THOÁT{RESET}.")
-    print(f"  - Nhấn phím {BOLD}'r'{RESET} trên cửa sổ camera để {BOLD}ĐĂNG KÝ KHUÔN MẶT MỚI{RESET} trực tiếp.\n")
+    print(f"  - Nhấn phím {BOLD}'r'{RESET} trên cửa sổ camera để {BOLD}ĐĂNG KÝ KHUÔN MẶT MỚI{RESET} trực tiếp.")
+    print(f"  - Nhấn phím {BOLD}'i'{RESET} để chọn chế độ chấm công {BOLD}VÀO (Check-In){RESET}.")
+    print(f"  - Nhấn phím {BOLD}'o'{RESET} để chọn chế độ chấm công {BOLD}RA (Check-Out){RESET}.\n")
     
     # Biến tạm lưu vector khuôn mặt đang được quét để đăng ký khi nhấn phím 'r'
     current_target_vec = None
@@ -232,6 +392,10 @@ def main():
     register_stable_frames = 0
     register_start_time = 0.0
     register_blink_state = "waiting" # "waiting", "closed", "verified"
+    
+    # Chế độ chấm công hiện tại (mặc định tự động theo giờ hệ thống)
+    current_hour = datetime.now().hour
+    active_mode = "VAO" if current_hour < 12 else "RA"
     
     while True:
         ret, frame = cap.read()
@@ -426,7 +590,8 @@ def main():
                     for ma_hs, info in database.items():
                         # Lặp qua tất cả các vector đã lưu cho học sinh này
                         for saved_vec in info["vectors"]:
-                            dist = np.mean(np.linalg.norm(normalized_target_vec - saved_vec, axis=1))
+                            # Khoảng cách Cosine Distance (1.0 - CosSim)
+                            dist = 1.0 - np.dot(normalized_target_vec, saved_vec)
                             if dist < min_dist:
                                 min_dist = dist
                                 if dist < THRESHOLD:
@@ -434,7 +599,7 @@ def main():
                                     best_match_name = info["name"]
                                     
                     # In log debug khoảng cách nhận dạng thực tế để dễ căn chỉnh
-                    print(f"[DEBUG] Khop: {best_match_name} (ID: {best_match_id}) | Min Dist: {min_dist:.4f} | Nguong THRESHOLD: {THRESHOLD}")
+                    print(f"[DEBUG] Khop: {best_match_name} (ID: {best_match_id}) | Cos Dist: {min_dist:.4f} | Nguong THRESHOLD: {THRESHOLD}")
                     
                     # 3. Xử lý hiển thị UI và Ghi nhật ký chấm công tức thì
                     current_time = time.time()
@@ -467,13 +632,13 @@ def main():
                                     color = (0, 255, 0)
                                     label = f"Chao {best_match_name}"
                                 else:
-                                    # Điểm danh TỨC THÌ
-                                    ghi_nhan_cham_cong(best_match_id)
+                                    # Điểm danh TỨC THÌ (lưu kèm trạng thái Vào/Ra)
+                                    ghi_nhan_cham_cong(best_match_id, active_mode)
                                     last_logged_time[best_match_id] = current_time
                                     liveness_status = "approved"
                                     liveness_result_time = current_time
-                                    liveness_result_msg = f"Chao {best_match_name}! (Thanh cong)"
-                                    print(f"{GREEN}[OK] Diem danh thanh cong cho {best_match_name}!{RESET}")
+                                    liveness_result_msg = f"Chao {best_match_name}! ({active_mode} OK)"
+                                    print(f"{GREEN}[OK] Diem danh ({active_mode}) thanh cong cho {best_match_name}!{RESET}")
                                     
                                     color = (0, 255, 0)
                                     label = liveness_result_msg
@@ -498,6 +663,20 @@ def main():
                 register_stable_frames = 0
                 cv2.putText(frame, "KHONG TIM THAY KHUON MAT", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1, cv2.LINE_AA)
                 cv2.putText(frame, "Nhan 'c' de HUY DANG KY", (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+        
+        # Vẽ trạng thái chế độ chấm công hiện tại
+        mode_text = f"CHE DO: {'VAO (Check-In)' if active_mode == 'VAO' else 'RA (Check-Out)'}"
+        cv2.putText(frame, mode_text, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
+        
+        # Vẽ số lượng điểm danh đang lưu ngoại tuyến nếu có
+        if os.path.exists(OFFLINE_QUEUE_FILE):
+            try:
+                with open(OFFLINE_QUEUE_FILE, 'r') as f:
+                    offline_count = len(json.load(f))
+                if offline_count > 0:
+                    cv2.putText(frame, f"OFFLINE QUEUE: {offline_count} recs", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2, cv2.LINE_AA)
+            except Exception:
+                pass
         
         # 4. Hiển thị màn hình camera
         cv2.imshow('Face Recognition Demo', frame)
@@ -542,6 +721,16 @@ def main():
             else:
                 print(f"{RED}[CẢNH BÁO] Không phát hiện khuôn mặt nào trước camera để đăng ký!{RESET}")
                 
+        # Phím nóng chuyển sang chế độ chấm công VÀO
+        elif key == ord('i'):
+            active_mode = "VAO"
+            print(f"🔄 {CYAN}[CHẾ ĐỘ] Đã chuyển sang chấm công: VÀO (Check-In){RESET}")
+            
+        # Phím nóng chuyển sang chế độ chấm công RA
+        elif key == ord('o'):
+            active_mode = "RA"
+            print(f"🔄 {CYAN}[CHẾ ĐỘ] Đã chuyển sang chấm công: RA (Check-Out){RESET}")
+            
         # Nhấn phím 'c' để hủy đăng ký khi đang trong chế độ đăng ký
         elif key == ord('c'):
             if register_mode:
