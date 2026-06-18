@@ -31,12 +31,15 @@ face_mesh = mp_face_mesh.FaceMesh(
     min_tracking_confidence=0.5
 )
 
-# Cấu hình kết nối SQL Server (đọc từ file .env)
+db_password = os.getenv('DB_PASSWORD')
+if not db_password:
+    raise ValueError("LỖI: Biến môi trường DB_PASSWORD chưa được cấu hình trong file .env!")
+
 db_config = {
     'server': os.getenv('DB_SERVER', '127.0.0.1'),
     'port': int(os.getenv('DB_PORT', 1433)),
     'user': os.getenv('DB_USER', 'sa'),
-    'password': os.getenv('DB_PASSWORD', 'DuyAnhMs2026!'),
+    'password': db_password,
     'database': os.getenv('DB_DATABASE', 'chamcongdatabase')
 }
 
@@ -397,25 +400,16 @@ def main():
     current_hour = datetime.now().hour
     active_mode = "VAO" if current_hour < 12 else "RA"
     
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print(f"{RED}[LỖI] Không nhận được khung hình từ camera.{RESET}")
-            break
-            
-        current_time = time.time()
+    register_prompt_active = False
+
+    def prompt_registration_input():
+        nonlocal register_mode, register_step, register_user_id, register_user_name
+        nonlocal register_overwrite, register_vectors, register_stable_frames
+        nonlocal register_start_time, register_blink_state, register_prompt_active
+        nonlocal database
         
-        # Kiểm tra timeout 10 giây trong chế độ đăng ký góc mặt
-        if register_mode and (current_time - register_start_time > 20.0):
-            print(f"\n{RED}[HẾT GIỜ] Đã quá 20 giây mà chưa hoàn tất quét 3 góc mặt. Quay lại luồng nhập thông tin.{RESET}")
-            liveness_status = "rejected"
-            liveness_result_time = current_time
-            liveness_result_msg = "Qua thoi gian (20s)!"
-            
-            register_mode = False
-            register_step = "idle"
-            
-            print(f"\n{YELLOW}[ĐĂNG KÝ LẠI] Vui lòng nhập lại thông tin học sinh...{RESET}")
+        try:
+            print(f"\n{YELLOW}[ĐĂNG KÝ] Phát hiện lệnh đăng ký khuôn mặt.{RESET}")
             ma_hs = input(f"{YELLOW} Nhập mã học sinh (ví dụ: hs001): {RESET}").strip()
             name_input = input(f"{YELLOW} Nhập tên học sinh: {RESET}").strip()
             if ma_hs and name_input:
@@ -427,11 +421,10 @@ def main():
                         overwrite = True
                     else:
                         print(f"{RED}[HỦY BỎ] Hủy đăng ký để tránh ghi đè dữ liệu.{RESET}\n")
-                        continue
+                        register_prompt_active = False
+                        return
                 
                 print(f"{YELLOW}[*] Bắt đầu quét góc mặt. Vui lòng nhìn thẳng vào camera...{RESET}")
-                register_mode = True
-                register_step = "straight"
                 register_user_id = ma_hs
                 register_user_name = name_input
                 register_overwrite = overwrite
@@ -439,8 +432,35 @@ def main():
                 register_stable_frames = 0
                 register_start_time = time.time()
                 register_blink_state = "waiting"
+                register_step = "straight"
+                register_mode = True
             else:
                 print(f"{RED}[HUỶ ĐĂNG KÝ] Thiếu thông tin mã học sinh hoặc tên học sinh. Huỷ bỏ.{RESET}\n")
+        except Exception as e:
+            print(f"{RED}[LỖI] Đăng ký lỗi: {e}{RESET}")
+        finally:
+            register_prompt_active = False
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print(f"{RED}[LỖI] Không nhận được khung hình từ camera.{RESET}")
+            break
+            
+        current_time = time.time()
+        
+        # Kiểm tra timeout 20 giây trong chế độ đăng ký góc mặt
+        if register_mode and (current_time - register_start_time > 20.0):
+            print(f"\n{RED}[HẾT GIỜ] Đã quá 20 giây mà chưa hoàn tất quét 3 góc mặt. Quay lại luồng nhập thông tin.{RESET}")
+            liveness_status = "rejected"
+            liveness_result_time = current_time
+            liveness_result_msg = "Qua thoi gian (20s)!"
+            
+            register_mode = False
+            register_step = "idle"
+            
+            register_prompt_active = True
+            threading.Thread(target=prompt_registration_input, daemon=True).start()
             continue
             
         # Lật ngang khung hình để giống hiệu ứng soi gương
@@ -591,7 +611,7 @@ def main():
                         # Lặp qua tất cả các vector đã lưu cho học sinh này
                         for saved_vec in info["vectors"]:
                             # Khoảng cách Cosine Distance (1.0 - CosSim)
-                            dist = 1.0 - np.dot(normalized_target_vec, saved_vec)
+                            dist = 1.0 - np.dot(normalized_target_vec.flatten(), saved_vec.flatten())
                             if dist < min_dist:
                                 min_dist = dist
                                 if dist < THRESHOLD:
@@ -677,6 +697,13 @@ def main():
                     cv2.putText(frame, f"OFFLINE QUEUE: {offline_count} recs", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2, cv2.LINE_AA)
             except Exception:
                 pass
+                
+        # Vẽ overlay thông báo nếu đang chờ nhập liệu terminal không đồng bộ
+        if register_prompt_active:
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (30, h // 2 - 40), (w - 30, h // 2 + 40), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+            cv2.putText(frame, "NHAP THONG TIN HS TREN TERMINAL CONSOLE...", (45, h // 2 + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2, cv2.LINE_AA)
         
         # 4. Hiển thị màn hình camera
         cv2.imshow('Face Recognition Demo', frame)
@@ -690,36 +717,13 @@ def main():
             
         # ĐĂNG KÝ khuôn mặt mới trực tiếp khi nhấn phím 'r'
         elif key == ord('r'):
-            if current_target_vec is not None:
-                print(f"\n{YELLOW}[ĐĂNG KÝ] Phát hiện lệnh đăng ký khuôn mặt.{RESET}")
-                ma_hs = input(f"{YELLOW} Nhập mã học sinh (ví dụ: hs001): {RESET}").strip()
-                name_input = input(f"{YELLOW} Nhập tên học sinh: {RESET}").strip()
-                if ma_hs and name_input:
-                    overwrite = False
-                    if ma_hs in database:
-                        existing_name = database[ma_hs]["name"]
-                        confirm = input(f"{YELLOW}⚠️ Mã học sinh '{ma_hs}' đã tồn tại (Tên: {existing_name}). Bạn có muốn cập nhật/ghi đè? (y/n): {RESET}").strip().lower()
-                        if confirm == 'y':
-                            overwrite = True
-                        else:
-                            print(f"{RED}[HỦY BỎ] Hủy đăng ký để tránh ghi đè dữ liệu.{RESET}\n")
-                            continue
-                            
-                    # Bắt đầu chế độ đăng ký góc mặt tự động
-                    print(f"{YELLOW}[*] Bắt đầu quét góc mặt. Vui lòng nhìn thẳng vào camera...{RESET}")
-                    register_mode = True
-                    register_step = "straight"
-                    register_user_id = ma_hs
-                    register_user_name = name_input
-                    register_overwrite = overwrite
-                    register_vectors = {}
-                    register_stable_frames = 0
-                    register_start_time = time.time()
-                    register_blink_state = "waiting"
-                else:
-                    print(f"{RED}[HUỶ ĐĂNG KÝ] Thiếu thông tin mã học sinh hoặc tên học sinh. Huỷ bỏ.{RESET}\n")
+            if register_mode or register_prompt_active:
+                print(f"⚠️ {YELLOW}[CẢNH BÁO] Hệ thống đang trong tiến trình đăng ký!{RESET}")
+            elif current_target_vec is not None:
+                register_prompt_active = True
+                threading.Thread(target=prompt_registration_input, daemon=True).start()
             else:
-                print(f"{RED}[CẢNH BÁO] Không phát hiện khuôn mặt nào trước camera để đăng ký!{RESET}")
+                print(f"⚠️ {RED}[CẢNH BÁO] Không phát hiện khuôn mặt nào trước camera để đăng ký!{RESET}")
                 
         # Phím nóng chuyển sang chế độ chấm công VÀO
         elif key == ord('i'):

@@ -6,11 +6,16 @@ from dotenv import load_dotenv
 # Tải cấu hình từ file .env
 load_dotenv()
 
+db_password = os.getenv('DB_PASSWORD')
+if not db_password:
+    print("\033[91m[ERROR] Biến môi trường DB_PASSWORD chưa được cấu hình trong file .env!\033[0m")
+    sys.exit(1)
+
 db_config = {
     'server': os.getenv('DB_SERVER', '127.0.0.1'),
     'port': int(os.getenv('DB_PORT', 1433)),
     'user': os.getenv('DB_USER', 'sa'),
-    'password': os.getenv('DB_PASSWORD', 'DuyAnhMs2026!'),
+    'password': db_password,
     'database': os.getenv('DB_DATABASE', 'chamcongdatabase')
 }
 
