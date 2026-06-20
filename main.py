@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 import random
 import threading
 from cryptography.fernet import Fernet
-from core.anti_fake import normalize_vector, extract_liveness_features
+from core.utils import normalize_vector, extract_liveness_features, check_depth_liveness, temporal_motion_tracker
 load_dotenv()
 
 GREEN = "\033[92m"
@@ -464,6 +464,9 @@ def main():
     manual_override = False
     
     register_prompt_active = False
+    
+    # Bộ theo dõi chuyển động thời gian chống giả mạo sinh học
+    motion_tracker = temporal_motion_tracker()
 
     def prompt_registration_input():
         nonlocal register_mode, register_step, register_user_id, register_user_name
@@ -578,6 +581,14 @@ def main():
                 
                 # Chuẩn hóa target_vec trước khi so sánh, khử sai lệch tỷ lệ camera
                 normalized_target_vec = normalize_vector(target_vec, w, h)
+                
+                # Phân tích liveness (Độ sâu 3D & Chuyển động sinh học) cho chế độ chấm công thường
+                if not register_mode:
+                    depth_ok, z_std = check_depth_liveness(face_landmarks)
+                    motion_ok, avg_motion = motion_tracker.update_and_check(face_landmarks)
+                else:
+                    depth_ok, z_std = True, 0.0
+                    motion_ok, avg_motion = True, 0.0
                 
                 if register_mode:
                     # --- CHẾ ĐỘ ĐĂNG KÝ (THU THẬP NHIỀU GÓC MẶT) ---
@@ -713,30 +724,45 @@ def main():
                             else:
                                 last_detected_name = best_match_id
                                 consecutive_count = 1
+                                motion_tracker.buffer.clear()
                             
                             if consecutive_count >= 3:
-                                in_cooldown = (best_match_id in last_logged_time) and (current_time - last_logged_time[best_match_id] <= LOG_COOLDOWN_SECONDS)
-                                if in_cooldown:
-                                    # Trong thời gian cooldown chỉ hiện chào thông thường
-                                    color = (0, 255, 0)
-                                    label = f"Chao {best_match_name}"
-                                else:
-                                    # Điểm danh TỨC THÌ (lưu kèm trạng thái Vào/Ra)
-                                    ghi_nhan_cham_cong(best_match_id, active_mode)
-                                    last_logged_time[best_match_id] = current_time
-                                    liveness_status = "approved"
+                                # Kiểm tra liveness bảo mật (Độ sâu 3D & Chuyển động sinh học)
+                                if not depth_ok or not motion_ok:
+                                    liveness_status = "rejected"
                                     liveness_result_time = current_time
-                                    liveness_result_msg = f"Chao {best_match_name}! ({active_mode} OK)"
-                                    print(f"{GREEN}[OK] Diem danh ({active_mode}) thanh cong cho {best_match_name}!{RESET}")
-                                    
-                                    color = (0, 255, 0)
+                                    liveness_result_msg = "[X] - GIA MAO"
+                                    color = (0, 0, 255)
                                     label = liveness_result_msg
+                                    print(f"{RED}[CANH BAO] Phat hien gia mao cho {best_match_name}! Depth OK: {depth_ok} (z_std: {z_std:.4f}), Motion OK: {motion_ok} (avg_motion: {avg_motion:.4f}){RESET}")
+                                    consecutive_count = 0
+                                    motion_tracker.buffer.clear()
+                                else:
+                                    in_cooldown = (best_match_id in last_logged_time) and (current_time - last_logged_time[best_match_id] <= LOG_COOLDOWN_SECONDS)
+                                    if in_cooldown:
+                                        # Trong thời gian cooldown chỉ hiện chào thông thường
+                                        color = (0, 255, 0)
+                                        label = f"Chao {best_match_name}"
+                                    else:
+                                        # Điểm danh TỨC THÌ (lưu kèm trạng thái Vào/Ra)
+                                        ghi_nhan_cham_cong(best_match_id, active_mode)
+                                        last_logged_time[best_match_id] = current_time
+                                        liveness_status = "approved"
+                                        liveness_result_time = current_time
+                                        liveness_result_msg = f"Chao {best_match_name}! ({active_mode} OK)"
+                                        print(f"{GREEN}[OK] Diem danh ({active_mode}) thanh cong cho {best_match_name}!{RESET}")
+                                        consecutive_count = 0
+                                        motion_tracker.buffer.clear()
+                                        
+                                        color = (0, 255, 0)
+                                        label = liveness_result_msg
                             else:
                                 color = (0, 165, 255)
                                 label = f"Nhan dang... {best_match_name} ({consecutive_count}/3)"
                         else:
                             last_detected_name = None
                             consecutive_count = 0
+                            motion_tracker.buffer.clear()
                             color = (0, 0, 255)
                             label = "[X] - Unknown"
                     
@@ -748,6 +774,7 @@ def main():
             # Không phát hiện khuôn mặt nào
             last_detected_name = None
             consecutive_count = 0
+            motion_tracker.buffer.clear()
             if register_mode:
                 register_stable_frames = 0
                 cv2.putText(frame, "KHONG TIM THAY KHUON MAT", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1, cv2.LINE_AA)
