@@ -406,11 +406,12 @@ def main():
     sync_thread = threading.Thread(target=sync_offline_queue, daemon=True)
     sync_thread.start()
     
-    # Mở camera của laptop trước để lấy thông số w, h
-    print(f"\n[*] Đang khởi động camera...")
-    cap = cv2.VideoCapture(0)
+    # Mở camera (đọc index từ .env, mặc định là 0)
+    camera_index = int(os.getenv('CAMERA_INDEX', 0))
+    print(f"\n[*] Đang khởi động camera với chỉ số (index): {camera_index}...")
+    cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
-        print(f"{RED}[LỖI] Không thể mở camera laptop. Vui lòng kiểm tra quyền truy cập camera.{RESET}")
+        print(f"{RED}[LỖI] Không thể mở camera (chỉ số: {camera_index}). Vui lòng kiểm tra kết nối.{RESET}")
         return
         
     print(f"{GREEN}[OK] Camera đã sẵn sàng!{RESET}")
