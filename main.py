@@ -406,9 +406,14 @@ def main():
     sync_thread = threading.Thread(target=sync_offline_queue, daemon=True)
     sync_thread.start()
     
-    # Mở camera (đọc index từ .env, mặc định là 0)
-    camera_index = int(os.getenv('CAMERA_INDEX', 0))
-    print(f"\n[*] Đang khởi động camera với chỉ số (index): {camera_index}...")
+    # Mở camera (đọc index từ .env, mặc định là 0 hoặc URL IP camera)
+    camera_index_raw = os.getenv('CAMERA_INDEX', '0')
+    try:
+        camera_index = int(camera_index_raw)
+    except ValueError:
+        camera_index = camera_index_raw
+        
+    print(f"\n[*] Đang khởi động camera: {camera_index}...")
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
         print(f"{RED}[LỖI] Không thể mở camera (chỉ số: {camera_index}). Vui lòng kiểm tra kết nối.{RESET}")
@@ -424,16 +429,30 @@ def main():
         return
     h, w, _ = frame_init.shape
     
-    # Load database khuôn mặt từ SQL Server sử dụng tỷ lệ w, h
+    # Load cấu hình tối ưu hóa di động từ .env
+    mobile_opt = os.getenv('MOBILE_OPTIMIZATION', 'True').lower() in ('true', '1', 'yes')
+    process_w = int(os.getenv('PROCESS_WIDTH', 640))
+    process_h = int(os.getenv('PROCESS_HEIGHT', 480))
+    target_fps = int(os.getenv('TARGET_FPS', 12))
+    headless_mode = os.getenv('HEADLESS_MODE', 'False').lower() in ('true', '1', 'yes')
+    
+    # Nếu tối ưu hóa di động, dùng kích thước xử lý để đồng bộ hóa chuẩn hóa vector
+    db_w = process_w if mobile_opt else w
+    db_h = process_h if mobile_opt else h
+    
+    # Load database khuôn mặt từ SQL Server sử dụng tỷ lệ db_w, db_h
     print(f"[*] Đang tải cơ sở dữ liệu khuôn mặt...")
-    database = load_database(w, h)
+    database = load_database(db_w, db_h)
     print(f"{GREEN}[OK] Đã tải thành công {len(database)} khuôn mặt.{RESET}")
     
     print(f"{YELLOW}>>> HƯỚNG DẪN ĐIỀU KHIỂN CAM:{RESET}")
-    print(f"  - Nhấn phím {BOLD}'q'{RESET} trên cửa sổ camera để {BOLD}THOÁT{RESET}.")
-    print(f"  - Nhấn phím {BOLD}'r'{RESET} trên cửa sổ camera để {BOLD}ĐĂNG KÝ KHUÔN MẶT MỚI{RESET} trực tiếp.")
-    print(f"  - Nhấn phím {BOLD}'i'{RESET} để chọn chế độ chấm công {BOLD}VÀO (Check-In){RESET}.")
-    print(f"  - Nhấn phím {BOLD}'o'{RESET} để chọn chế độ chấm công {BOLD}RA (Check-Out){RESET}.\n")
+    if not headless_mode:
+        print(f"  - Nhấn phím {BOLD}'q'{RESET} trên cửa sổ camera để {BOLD}THOÁT{RESET}.")
+        print(f"  - Nhấn phím {BOLD}'r'{RESET} trên cửa sổ camera để {BOLD}ĐĂNG KÝ KHUÔN MẶT MỚI{RESET} trực tiếp.")
+        print(f"  - Nhấn phím {BOLD}'i'{RESET} để chọn chế độ chấm công {BOLD}VÀO (Check-In){RESET}.")
+        print(f"  - Nhấn phím {BOLD}'o'{RESET} để chọn chế độ chấm công {BOLD}RA (Check-Out){RESET}.\n")
+    else:
+        print(f"  - Đang chạy ở chế độ KHÔNG MÀN HÌNH (Headless). Nhấn {BOLD}Ctrl+C{RESET} trong terminal để dừng.\n")
     
     # Biến tạm lưu vector khuôn mặt đang được quét để đăng ký khi nhấn phím 'r'
     current_target_vec = None
@@ -467,6 +486,10 @@ def main():
     
     # Bộ theo dõi chuyển động thời gian chống giả mạo sinh học
     motion_tracker = temporal_motion_tracker()
+    
+    # Biến tối ưu hóa tần suất và lưu trữ hình ảnh hiển thị di động
+    last_process_time = 0.0
+    cached_face_drawings = []
 
     def prompt_registration_input():
         nonlocal register_mode, register_step, register_user_id, register_user_name
@@ -509,336 +532,378 @@ def main():
             if not register_mode:
                 register_step = "idle"
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print(f"{RED}[LỖI] Không nhận được khung hình từ camera.{RESET}")
-            break
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print(f"{RED}[LỖI] Không nhận được khung hình từ camera.{RESET}")
+                break
+                
+            current_time = time.time()
             
-        current_time = time.time()
-        
-        # Tự động cập nhật chế độ chấm công theo thời gian thực (nếu không có override thủ công)
-        if not manual_override:
-            active_mode = "VAO" if datetime.now().hour < 12 else "RA"
-        
-        # Kiểm tra timeout 20 giây trong chế độ đăng ký góc mặt
-        if register_mode and (current_time - register_start_time > 20.0):
-            print(f"\n{RED}[HẾT GIỜ] Đã quá 20 giây mà chưa hoàn tất quét 3 góc mặt. Quay lại luồng nhập thông tin.{RESET}")
-            liveness_status = "rejected"
-            liveness_result_time = current_time
-            liveness_result_msg = "Qua thoi gian (20s)!"
+            # Tự động cập nhật chế độ chấm công theo thời gian thực (nếu không có override thủ công)
+            if not manual_override:
+                active_mode = "VAO" if datetime.now().hour < 12 else "RA"
             
-            register_mode = False
-            register_step = "idle"
-            
-            register_prompt_active = True
-            threading.Thread(target=prompt_registration_input, daemon=True).start()
-            continue
-            
-        # Lật ngang khung hình để giống hiệu ứng soi gương
-        frame = cv2.flip(frame, 1)
-        
-        # --- ĐOẠN CODE XỬ LÝ THIẾU SÁNG ---
-        # Tăng độ tương phản (Alpha) và độ sáng (Beta)
-        alpha = 1.3  # Hệ số tương phản (1.0 - 3.0) giúp làm rõ nét các đường biên
-        beta = 40    # Giá trị độ sáng cộng thêm (0 - 100) giúp kích sáng phòng tối
-        frame = cv2.convertScaleAbs(frame, alpha=alpha, beta=beta)
-        
-        h, w, _ = frame.shape
-        
-        # Tối ưu hóa hiệu năng: Chuyển ảnh sang BGR2RGB và đặt flag writable = False
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        rgb_frame.flags.writeable = False
-        results = face_mesh.process(rgb_frame)
-        rgb_frame.flags.writeable = True
-        
-        current_target_vec = None
-        
-        if results.multi_face_landmarks:
-            for face_landmarks in results.multi_face_landmarks:
-                # 1. Trích xuất vector 1434 chiều từ 478 landmarks
-                target_vec = np.array([[v.x, v.y, v.z] for v in face_landmarks.landmark])
-                current_target_vec = target_vec  # Lưu lại vector hiện tại phục vụ đăng ký
+            # Kiểm tra timeout 20 giây trong chế độ đăng ký góc mặt
+            if register_mode and (current_time - register_start_time > 20.0):
+                print(f"\n{RED}[HẾT GIỜ] Đã quá 20 giây mà chưa hoàn tất quét 3 góc mặt. Quay lại luồng nhập thông tin.{RESET}")
+                liveness_status = "rejected"
+                liveness_result_time = current_time
+                liveness_result_msg = "Qua thoi gian (20s)!"
                 
-                # Tính toán bounding box từ các điểm landmarks để vẽ khung quanh khuôn mặt
-                x_coords = [lm.x for lm in face_landmarks.landmark]
-                y_coords = [lm.y for lm in face_landmarks.landmark]
-                
-                x_min, x_max = int(min(x_coords) * w), int(max(x_coords) * w)
-                y_min, y_max = int(min(y_coords) * h), int(max(y_coords) * h)
-                
-                padding_x = int((x_max - x_min) * 0.1)
-                padding_y = int((y_max - y_min) * 0.1)
-                x1 = max(0, x_min - padding_x)
-                y1 = max(0, y_min - padding_y)
-                x2 = min(w, x_max + padding_x)
-                y2 = min(h, y_max + padding_y)
-                
-                # 2. So sánh và tìm khuôn mặt khớp nhất trong database
-                best_match_id = "Unknown"
-                best_match_name = "Unknown"
-                min_dist = float('inf')
-                
-                # Chuẩn hóa target_vec trước khi so sánh, khử sai lệch tỷ lệ camera
-                normalized_target_vec = normalize_vector(target_vec, w, h)
-                
-                # Phân tích liveness (Độ sâu 3D & Chuyển động sinh học) cho chế độ chấm công thường
-                if not register_mode:
-                    depth_ok, z_std = check_depth_liveness(face_landmarks)
-                    motion_ok, avg_motion = motion_tracker.update_and_check(face_landmarks)
-                else:
-                    depth_ok, z_std = True, 0.0
-                    motion_ok, avg_motion = True, 0.0
-                
-                if register_mode:
-                    # --- CHẾ ĐỘ ĐĂNG KÝ (THU THẬP NHIỀU GÓC MẶT) ---
-                    features = extract_liveness_features(face_landmarks)
-                    eye_l, eye_r, mouth_openness, yaw, pitch = features
-                    
-                    color = (255, 191, 0)  # Màu xanh lam sáng (Cyan)
-                    
-                    if register_step == "straight":
-                        if abs(yaw) < 0.08:
-                            # State machine nháy mắt chống giả mạo bằng ảnh tĩnh
-                            if register_blink_state == "waiting":
-                                if eye_l < 0.15 and eye_r < 0.15:
-                                    register_blink_state = "closed"
-                                    print(f"{YELLOW}[*] Đã nhắm mắt. Vui lòng mở mắt để hoàn tất xác thực...{RESET}")
-                                label = "[1/3] DANG KY: NHAY MAT DE XAC MINH"
-                                cv2.putText(frame, "NHAY MAT DE XAC THUC LIVENESS", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
-                            elif register_blink_state == "closed":
-                                if eye_l > 0.22 and eye_r > 0.22:
-                                    register_blink_state = "verified"
-                                    register_stable_frames = 0
-                                    print(f"{GREEN}[OK] Xác thực liveness thành công!{RESET}")
-                                label = "[1/3] DANG KY: MO MAT DE TIEP TUC"
-                                cv2.putText(frame, "MO MAT DE HOAN TAT", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
-                            elif register_blink_state == "verified":
-                                register_stable_frames += 1
-                                if register_stable_frames >= 5:
-                                    register_vectors["straight"] = target_vec.flatten().tolist()
-                                    register_step = "left"
-                                    register_stable_frames = 0
-                                    print(f"{GREEN}[OK] Đã chụp và lưu góc THẲNG cho học sinh: {register_user_name}{RESET}")
-                                label = f"[1/3] DANG KY: NHIN THANG ({register_stable_frames}/5)"
-                                cv2.putText(frame, "GIU NGUYEN HUONG NHIN THANG", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
-                        else:
-                            if register_blink_state != "verified":
-                                register_blink_state = "waiting"
-                            register_stable_frames = 0
-                            label = "[1/3] DANG KY: NHIN THANG"
-                            cv2.putText(frame, "NHIN THANG VAO CAMERA", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
-                        
-                    elif register_step == "left":
-                        if yaw < -0.15:
-                            register_stable_frames += 1
-                            if register_stable_frames >= 5:
-                                register_vectors["left"] = target_vec.flatten().tolist()
-                                register_step = "right"
-                                register_stable_frames = 0
-                                print(f"{GREEN}[OK] Da chup va luu goc TRAI cho hoc sinh: {register_user_name}{RESET}")
-                        else:
-                            register_stable_frames = 0
-                        
-                        label = f"[2/3] DANG KY: QUAY TRAI ({register_stable_frames}/5)"
-                        cv2.putText(frame, "QUAY DAU SANG TRAI (<-)", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
-                        
-                    elif register_step == "right":
-                        if yaw > 0.15:
-                            register_stable_frames += 1
-                            if register_stable_frames >= 5:
-                                register_vectors["right"] = target_vec.flatten().tolist()
-                                register_step = "complete"
-                                register_stable_frames = 0
-                                print(f"{GREEN}[OK] Da chup va luu goc PHAI cho hoc sinh: {register_user_name}{RESET}")
-                        else:
-                            register_stable_frames = 0
-                        
-                        label = f"[3/3] DANG KY: QUAY PHAI ({register_stable_frames}/5)"
-                        cv2.putText(frame, "QUAY DAU SANG PHAI (->)", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
-                    
-                    if register_step == "complete":
-                        print(f"[*] Dang luu vector 3 goc cua {register_user_name} vao SQL Server...")
-                        if luu_vector_hoc_sinh(register_user_id, register_user_name, register_vectors, overwrite=register_overwrite):
-                            database = load_database(w, h)
-                            print(f"{GREEN}[THÀNH CÔNG] Đăng ký thành công học sinh: {register_user_name}{RESET}\n")
-                            liveness_status = "approved"
-                            liveness_result_time = time.time()
-                            liveness_result_msg = f"Chao {register_user_name}! (Dang ky thanh cong)"
-                        else:
-                            print(f"{RED}[LỖI] Đăng ký thất bại do không luu duoc vao database.{RESET}\n")
-                            liveness_status = "rejected"
-                            liveness_result_time = time.time()
-                            liveness_result_msg = "Dang ky that bai!"
-                            
-                        register_mode = False
-                        register_step = "idle"
-                        color = (0, 255, 0) if liveness_status == "approved" else (0, 0, 255)
-                        label = liveness_result_msg
-                    
-                    # Vẽ bounding box và nhãn đăng ký
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                    cv2.rectangle(frame, (x1, y1 - 25), (x2, y1), color, -1)
-                    cv2.putText(frame, label, (x1 + 5, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-                
-                else:
-                    # --- CHẾ ĐỘ CHẤM CÔNG THƯỜNG (NHẬN DIỆN MỌI GÓC MẶT VÀ CHẤM CÔNG TỨC THỜI) ---
-                    best_match_id = "Unknown"
-                    best_match_name = "Unknown"
-                    min_dist = float('inf')
-                    
-                    for ma_hs, info in database.items():
-                        # Lặp qua tất cả các vector đã lưu cho học sinh này
-                        for saved_vec in info["vectors"]:
-                            # Khoảng cách Cosine Distance (1.0 - CosSim)
-                            dist = 1.0 - np.dot(normalized_target_vec.flatten(), saved_vec.flatten())
-                            if dist < min_dist:
-                                min_dist = dist
-                                if dist < THRESHOLD:
-                                    best_match_id = ma_hs
-                                    best_match_name = info["name"]
-                                    
-                    # In log debug khoảng cách nhận dạng thực tế để dễ căn chỉnh
-                    print(f"[DEBUG] Khop: {best_match_name} (ID: {best_match_id}) | Cos Dist: {min_dist:.4f} | Nguong THRESHOLD: {THRESHOLD}")
-                    
-                    # 3. Xử lý hiển thị UI và Ghi nhật ký chấm công tức thì
-                    current_time = time.time()
-                    
-                    # Kiểm tra và xử lý trạng thái hiển thị kết quả cũ
-                    if liveness_status in ["approved", "rejected"]:
-                        if current_time - liveness_result_time >= 2.0:
-                            liveness_status = "idle"
-                    
-                    if liveness_status == "approved":
-                        color = (0, 255, 0)  # Xanh lá (BGR)
-                        label = liveness_result_msg
-                    elif liveness_status == "rejected":
-                        color = (0, 0, 255)  # Đỏ (BGR)
-                        label = liveness_result_msg
-                    else:
-                        # Trạng thái rảnh (idle) - thực hiện nhận diện và chấm công nhanh
-                        if best_match_id != "Unknown":
-                            # Cập nhật đếm liên tiếp chống nhiễu
-                            if best_match_id == last_detected_name:
-                                consecutive_count += 1
-                            else:
-                                last_detected_name = best_match_id
-                                consecutive_count = 1
-                                motion_tracker.buffer.clear()
-                            
-                            if consecutive_count >= 3:
-                                # Kiểm tra liveness bảo mật (Độ sâu 3D & Chuyển động sinh học)
-                                if not depth_ok or not motion_ok:
-                                    liveness_status = "rejected"
-                                    liveness_result_time = current_time
-                                    liveness_result_msg = "[X] - GIA MAO"
-                                    color = (0, 0, 255)
-                                    label = liveness_result_msg
-                                    print(f"{RED}[CANH BAO] Phat hien gia mao cho {best_match_name}! Depth OK: {depth_ok} (z_std: {z_std:.4f}), Motion OK: {motion_ok} (avg_motion: {avg_motion:.4f}){RESET}")
-                                    consecutive_count = 0
-                                    motion_tracker.buffer.clear()
-                                else:
-                                    in_cooldown = (best_match_id in last_logged_time) and (current_time - last_logged_time[best_match_id] <= LOG_COOLDOWN_SECONDS)
-                                    if in_cooldown:
-                                        # Trong thời gian cooldown chỉ hiện chào thông thường
-                                        color = (0, 255, 0)
-                                        label = f"Chao {best_match_name}"
-                                    else:
-                                        # Điểm danh TỨC THÌ (lưu kèm trạng thái Vào/Ra)
-                                        ghi_nhan_cham_cong(best_match_id, active_mode)
-                                        last_logged_time[best_match_id] = current_time
-                                        liveness_status = "approved"
-                                        liveness_result_time = current_time
-                                        liveness_result_msg = f"Chao {best_match_name}! ({active_mode} OK)"
-                                        print(f"{GREEN}[OK] Diem danh ({active_mode}) thanh cong cho {best_match_name}!{RESET}")
-                                        consecutive_count = 0
-                                        motion_tracker.buffer.clear()
-                                        
-                                        color = (0, 255, 0)
-                                        label = liveness_result_msg
-                            else:
-                                color = (0, 165, 255)
-                                label = f"Nhan dang... {best_match_name} ({consecutive_count}/3)"
-                        else:
-                            last_detected_name = None
-                            consecutive_count = 0
-                            motion_tracker.buffer.clear()
-                            color = (0, 0, 255)
-                            label = "[X] - Unknown"
-                    
-                    # Vẽ bounding box và nhãn
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                    cv2.rectangle(frame, (x1, y1 - 25), (x2, y1), color, -1)
-                    cv2.putText(frame, label, (x1 + 5, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-        else:
-            # Không phát hiện khuôn mặt nào
-            last_detected_name = None
-            consecutive_count = 0
-            motion_tracker.buffer.clear()
-            if register_mode:
-                register_stable_frames = 0
-                cv2.putText(frame, "KHONG TIM THAY KHUON MAT", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1, cv2.LINE_AA)
-                cv2.putText(frame, "Nhan 'c' de HUY DANG KY", (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
-        
-        # Vẽ trạng thái chế độ chấm công hiện tại
-        mode_text = f"CHE DO: {'VAO (Check-In)' if active_mode == 'VAO' else 'RA (Check-Out)'}"
-        cv2.putText(frame, mode_text, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
-        
-        # Vẽ số lượng điểm danh đang lưu ngoại tuyến nếu có
-        if os.path.exists(OFFLINE_QUEUE_FILE):
-            try:
-                with open(OFFLINE_QUEUE_FILE, 'r') as f:
-                    offline_count = len(json.load(f))
-                if offline_count > 0:
-                    cv2.putText(frame, f"OFFLINE QUEUE: {offline_count} recs", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2, cv2.LINE_AA)
-            except Exception:
-                pass
-                
-        # Vẽ overlay thông báo nếu đang chờ nhập liệu terminal không đồng bộ
-        if register_prompt_active:
-            overlay = frame.copy()
-            cv2.rectangle(overlay, (30, h // 2 - 40), (w - 30, h // 2 + 40), (0, 0, 0), -1)
-            cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-            cv2.putText(frame, "NHAP THONG TIN HS TREN TERMINAL CONSOLE...", (45, h // 2 + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2, cv2.LINE_AA)
-        
-        # 4. Hiển thị màn hình camera
-        cv2.imshow('Face Recognition Demo', frame)
-        
-        key = cv2.waitKey(1) & 0xFF
-        
-        # 5. Xử lý sự kiện nhấn phím
-        # THOÁT khi nhấn phím 'q'
-        if key == ord('q'):
-            break
-            
-        # ĐĂNG KÝ khuôn mặt mới trực tiếp khi nhấn phím 'r'
-        elif key == ord('r'):
-            if register_mode or register_prompt_active:
-                print(f"⚠️ {YELLOW}[CẢNH BÁO] Hệ thống đang trong tiến trình đăng ký!{RESET}")
-            elif current_target_vec is not None:
-                register_prompt_active = True
-                threading.Thread(target=prompt_registration_input, daemon=True).start()
-            else:
-                print(f"⚠️ {RED}[CẢNH BÁO] Không phát hiện khuôn mặt nào trước camera để đăng ký!{RESET}")
-                
-        # Phím nóng chuyển sang chế độ chấm công VÀO
-        elif key == ord('i'):
-            active_mode = "VAO"
-            manual_override = True
-            print(f"🔄 {CYAN}[CHẾ ĐỘ] Đã chuyển sang chấm công: VÀO (Check-In) [Override]{RESET}")
-            
-        # Phím nóng chuyển sang chế độ chấm công RA
-        elif key == ord('o'):
-            active_mode = "RA"
-            manual_override = True
-            print(f"🔄 {CYAN}[CHẾ ĐỘ] Đã chuyển sang chấm công: RA (Check-Out) [Override]{RESET}")
-            
-        # Nhấn phím 'c' để hủy đăng ký khi đang trong chế độ đăng ký
-        elif key == ord('c'):
-            if register_mode:
                 register_mode = False
                 register_step = "idle"
-                print(f"{RED}[HỦY BỎ] Đã hủy đăng ký học sinh.{RESET}\n")
+                
+                register_prompt_active = True
+                threading.Thread(target=prompt_registration_input, daemon=True).start()
+                continue
+                
+            # Lật ngang khung hình để giống hiệu ứng soi gương
+            frame = cv2.flip(frame, 1)
+            
+            # --- ĐOẠN CODE XỬ LÝ THIẾU SÁNG ---
+            # Tăng độ tương phản (Alpha) và độ sáng (Beta)
+            alpha = 1.3  # Hệ số tương phản (1.0 - 3.0) giúp làm rõ nét các đường biên
+            beta = 40    # Giá trị độ sáng cộng thêm (0 - 100) giúp kích sáng phòng tối
+            frame = cv2.convertScaleAbs(frame, alpha=alpha, beta=beta)
+            
+            h_disp, w_disp, _ = frame.shape
+            
+            # Giới hạn tần suất xử lý AI nếu tối ưu di động và không ở chế độ đăng ký
+            should_process_face = True
+            elapsed = current_time - last_process_time
+            if mobile_opt and not register_mode:
+                min_interval = 1.0 / target_fps
+                if elapsed < min_interval:
+                    should_process_face = False
+                    
+            if should_process_face:
+                # Tải kích thước xử lý tùy vào cấu hình
+                if mobile_opt:
+                    h, w = process_h, process_w
+                    frame_proc = cv2.resize(frame, (w, h))
+                else:
+                    h, w = h_disp, w_disp
+                    frame_proc = frame
+                    
+                # Tối ưu hóa hiệu năng: Chuyển ảnh sang BGR2RGB và đặt flag writable = False
+                rgb_frame = cv2.cvtColor(frame_proc, cv2.COLOR_BGR2RGB)
+                rgb_frame.flags.writeable = False
+                results = face_mesh.process(rgb_frame)
+                rgb_frame.flags.writeable = True
+                
+                current_target_vec = None
+                cached_face_drawings = []  # Xóa cache vẽ cũ
+                
+                if results.multi_face_landmarks:
+                    for face_landmarks in results.multi_face_landmarks:
+                        # 1. Trích xuất vector 1434 chiều từ 478 landmarks
+                        target_vec = np.array([[v.x, v.y, v.z] for v in face_landmarks.landmark])
+                        current_target_vec = target_vec  # Lưu lại vector hiện tại phục vụ đăng ký
+                        
+                        # Tính toán bounding box từ các điểm landmarks để vẽ khung quanh khuôn mặt (theo kích thước hiển thị hiển thị)
+                        x_coords = [lm.x for lm in face_landmarks.landmark]
+                        y_coords = [lm.y for lm in face_landmarks.landmark]
+                        
+                        x_min, x_max = int(min(x_coords) * w_disp), int(max(x_coords) * w_disp)
+                        y_min, y_max = int(min(y_coords) * h_disp), int(max(y_coords) * h_disp)
+                        
+                        padding_x = int((x_max - x_min) * 0.1)
+                        padding_y = int((y_max - y_min) * 0.1)
+                        x1 = max(0, x_min - padding_x)
+                        y1 = max(0, y_min - padding_y)
+                        x2 = min(w_disp, x_max + padding_x)
+                        y2 = min(h_disp, y_max + padding_y)
+                        
+                        # 2. So sánh và tìm khuôn mặt khớp nhất trong database (dựa trên w, h xử lý)
+                        best_match_id = "Unknown"
+                        best_match_name = "Unknown"
+                        min_dist = float('inf')
+                        
+                        # Chuẩn hóa target_vec trước khi so sánh, khử sai lệch tỷ lệ camera
+                        normalized_target_vec = normalize_vector(target_vec, w, h)
+                        
+                        # Phân tích liveness (Độ sâu 3D & Chuyển động sinh học) cho chế độ chấm công thường
+                        if not register_mode:
+                            depth_ok, z_std = check_depth_liveness(face_landmarks)
+                            motion_ok, avg_motion = motion_tracker.update_and_check(face_landmarks)
+                        else:
+                            depth_ok, z_std = True, 0.0
+                            motion_ok, avg_motion = True, 0.0
+                        
+                        if register_mode:
+                            # --- CHẾ ĐỘ ĐĂNG KÝ (THU THẬP NHIỀU GÓC MẶT) ---
+                            features = extract_liveness_features(face_landmarks)
+                            eye_l, eye_r, mouth_openness, yaw, pitch = features
+                            
+                            color = (255, 191, 0)  # Màu xanh lam sáng (Cyan)
+                            
+                            if register_step == "straight":
+                                if abs(yaw) < 0.08:
+                                    # State machine nháy mắt chống giả mạo bằng ảnh tĩnh
+                                    if register_blink_state == "waiting":
+                                        if eye_l < 0.15 and eye_r < 0.15:
+                                            register_blink_state = "closed"
+                                            print(f"{YELLOW}[*] Đã nhắm mắt. Vui lòng mở mắt để hoàn tất xác thực...{RESET}")
+                                        label = "[1/3] DANG KY: NHAY MAT DE XAC MINH"
+                                    elif register_blink_state == "closed":
+                                        if eye_l > 0.22 and eye_r > 0.22:
+                                            register_blink_state = "verified"
+                                            register_stable_frames = 0
+                                            print(f"{GREEN}[OK] Xác thực liveness thành công!{RESET}")
+                                        label = "[1/3] DANG KY: MO MAT DE TIEP TUC"
+                                    elif register_blink_state == "verified":
+                                        register_stable_frames += 1
+                                        if register_stable_frames >= 5:
+                                            register_vectors["straight"] = target_vec.flatten().tolist()
+                                            register_step = "left"
+                                            register_stable_frames = 0
+                                            print(f"{GREEN}[OK] Đã chụp và lưu góc THẲNG cho học sinh: {register_user_name}{RESET}")
+                                        label = f"[1/3] DANG KY: NHIN THANG ({register_stable_frames}/5)"
+                                else:
+                                    if register_blink_state != "verified":
+                                        register_blink_state = "waiting"
+                                    register_stable_frames = 0
+                                    label = "[1/3] DANG KY: NHIN THANG"
+                                
+                            elif register_step == "left":
+                                if yaw < -0.15:
+                                    register_stable_frames += 1
+                                    if register_stable_frames >= 5:
+                                        register_vectors["left"] = target_vec.flatten().tolist()
+                                        register_step = "right"
+                                        register_stable_frames = 0
+                                        print(f"{GREEN}[OK] Da chup va luu goc TRAI cho hoc sinh: {register_user_name}{RESET}")
+                                else:
+                                    register_stable_frames = 0
+                                
+                                label = f"[2/3] DANG KY: QUAY TRAI ({register_stable_frames}/5)"
+                                
+                            elif register_step == "right":
+                                if yaw > 0.15:
+                                    register_stable_frames += 1
+                                    if register_stable_frames >= 5:
+                                        register_vectors["right"] = target_vec.flatten().tolist()
+                                        register_step = "complete"
+                                        register_stable_frames = 0
+                                        print(f"{GREEN}[OK] Da chup va luu goc PHAI cho hoc sinh: {register_user_name}{RESET}")
+                                else:
+                                    register_stable_frames = 0
+                                
+                                label = f"[3/3] DANG KY: QUAY PHAI ({register_stable_frames}/5)"
+                            
+                            if register_step == "complete":
+                                print(f"[*] Dang luu vector 3 goc cua {register_user_name} vao SQL Server...")
+                                if luu_vector_hoc_sinh(register_user_id, register_user_name, register_vectors, overwrite=register_overwrite):
+                                    database = load_database(db_w, db_h)
+                                    print(f"{GREEN}[THÀNH CÔNG] Đăng ký thành công học sinh: {register_user_name}{RESET}\n")
+                                    liveness_status = "approved"
+                                    liveness_result_time = time.time()
+                                    liveness_result_msg = f"Chao {register_user_name}! (Dang ky thanh cong)"
+                                else:
+                                    print(f"{RED}[LỖI] Đăng ký thất bại do không luu duoc vao database.{RESET}\n")
+                                    liveness_status = "rejected"
+                                    liveness_result_time = time.time()
+                                    liveness_result_msg = "Dang ky that bai!"
+                                    
+                                register_mode = False
+                                register_step = "idle"
+                                color = (0, 255, 0) if liveness_status == "approved" else (0, 0, 255)
+                                label = liveness_result_msg
+                            
+                            # Vẽ ngay lên frame
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                            cv2.rectangle(frame, (x1, y1 - 25), (x2, y1), color, -1)
+                            cv2.putText(frame, label, (x1 + 5, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                            
+                            # Lưu vào cache
+                            cached_face_drawings.append(("box", x1, y1, x2, y2, color, label))
+                            
+                            # Hướng dẫn vẽ thêm phụ trợ chế độ đăng ký
+                            if register_step == "straight" and register_blink_state == "waiting":
+                                cv2.putText(frame, "NHAY MAT DE XAC THUC LIVENESS", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                            elif register_step == "straight" and register_blink_state == "closed":
+                                cv2.putText(frame, "MO MAT DE HOAN TAT", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                            elif register_step == "straight" and register_blink_state == "verified":
+                                cv2.putText(frame, "GIU NGUYEN HUONG NHIN THANG", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                            elif register_step == "straight":
+                                cv2.putText(frame, "NHIN THANG VAO CAMERA", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                            elif register_step == "left":
+                                cv2.putText(frame, "QUAY DAU SANG TRAI (<-)", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                            elif register_step == "right":
+                                cv2.putText(frame, "QUAY DAU SANG PHAI (->)", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                                
+                        else:
+                            # --- CHẾ ĐỘ CHẤM CÔNG THƯỜNG (NHẬN DIỆN MỌI GÓC MẶT VÀ CHẤM CÔNG TỨC THỜI) ---
+                            best_match_id = "Unknown"
+                            best_match_name = "Unknown"
+                            min_dist = float('inf')
+                            
+                            for ma_hs, info in database.items():
+                                for saved_vec in info["vectors"]:
+                                    dist = 1.0 - np.dot(normalized_target_vec.flatten(), saved_vec.flatten())
+                                    if dist < min_dist:
+                                        min_dist = dist
+                                        if dist < THRESHOLD:
+                                            best_match_id = ma_hs
+                                            best_match_name = info["name"]
+                                            
+                            print(f"[DEBUG] Khop: {best_match_name} (ID: {best_match_id}) | Cos Dist: {min_dist:.4f} | Nguong THRESHOLD: {THRESHOLD}")
+                            
+                            if liveness_status in ["approved", "rejected"]:
+                                if current_time - liveness_result_time >= 2.0:
+                                    liveness_status = "idle"
+                            
+                            if liveness_status == "approved":
+                                color = (0, 255, 0)
+                                label = liveness_result_msg
+                            elif liveness_status == "rejected":
+                                color = (0, 0, 255)
+                                label = liveness_result_msg
+                            else:
+                                if best_match_id != "Unknown":
+                                    if best_match_id == last_detected_name:
+                                        consecutive_count += 1
+                                    else:
+                                        last_detected_name = best_match_id
+                                        consecutive_count = 1
+                                        motion_tracker.buffer.clear()
+                                    
+                                    if consecutive_count >= 3:
+                                        if not depth_ok or not motion_ok:
+                                            liveness_status = "rejected"
+                                            liveness_result_time = current_time
+                                            liveness_result_msg = "[X] - GIA MAO"
+                                            color = (0, 0, 255)
+                                            label = liveness_result_msg
+                                            print(f"{RED}[CANH BAO] Phat hien gia mao cho {best_match_name}! Depth OK: {depth_ok} (z_std: {z_std:.4f}), Motion OK: {motion_ok} (avg_motion: {avg_motion:.4f}){RESET}")
+                                            consecutive_count = 0
+                                            motion_tracker.buffer.clear()
+                                        else:
+                                            in_cooldown = (best_match_id in last_logged_time) and (current_time - last_logged_time[best_match_id] <= LOG_COOLDOWN_SECONDS)
+                                            if in_cooldown:
+                                                color = (0, 255, 0)
+                                                label = f"Chao {best_match_name}"
+                                            else:
+                                                ghi_nhan_cham_cong(best_match_id, active_mode)
+                                                last_logged_time[best_match_id] = current_time
+                                                liveness_status = "approved"
+                                                liveness_result_time = current_time
+                                                liveness_result_msg = f"Chao {best_match_name}! ({active_mode} OK)"
+                                                print(f"{GREEN}[OK] Diem danh ({active_mode}) thanh cong cho {best_match_name}!{RESET}")
+                                                consecutive_count = 0
+                                                motion_tracker.buffer.clear()
+                                                color = (0, 255, 0)
+                                                label = liveness_result_msg
+                                    else:
+                                        color = (0, 165, 255)
+                                        label = f"Nhan dang... {best_match_name} ({consecutive_count}/3)"
+                                else:
+                                    last_detected_name = None
+                                    consecutive_count = 0
+                                    motion_tracker.buffer.clear()
+                                    color = (0, 0, 255)
+                                    label = "[X] - Unknown"
+                            
+                            # Vẽ lên frame
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                            cv2.rectangle(frame, (x1, y1 - 25), (x2, y1), color, -1)
+                            cv2.putText(frame, label, (x1 + 5, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                            
+                            # Lưu vào cache
+                            cached_face_drawings.append(("box", x1, y1, x2, y2, color, label))
+                else:
+                    # Không phát hiện khuôn mặt nào
+                    last_detected_name = None
+                    consecutive_count = 0
+                    motion_tracker.buffer.clear()
+                    if register_mode:
+                        register_stable_frames = 0
+                        cv2.putText(frame, "KHONG TIM THAY KHUON MAT", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1, cv2.LINE_AA)
+                        cv2.putText(frame, "Nhan 'c' de HUY DANG KY", (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+                        cached_face_drawings.append(("text", "KHONG TIM THAY KHUON MAT", (30, 50), 0.6, (0, 0, 255)))
+                        cached_face_drawings.append(("text", "Nhan 'c' de HUY DANG KY", (30, 80), 0.5, (0, 0, 255)))
+                
+                last_process_time = current_time
+            else:
+                # Vẽ lại các bounding box từ cached vẽ trên khung hình mới khi bỏ qua AI processing
+                for drawing in cached_face_drawings:
+                    if drawing[0] == "box":
+                        _, x1, y1, x2, y2, color, label = drawing
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                        cv2.rectangle(frame, (x1, y1 - 25), (x2, y1), color, -1)
+                        cv2.putText(frame, label, (x1 + 5, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                    elif drawing[0] == "text":
+                        _, text, pos, scale, color = drawing
+                        cv2.putText(frame, text, pos, cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
+            
+            # Vẽ trạng thái chế độ chấm công hiện tại
+            mode_text = f"CHE DO: {'VAO (Check-In)' if active_mode == 'VAO' else 'RA (Check-Out)'}"
+            cv2.putText(frame, mode_text, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
+            
+            # Vẽ số lượng điểm danh đang lưu ngoại tuyến nếu có
+            if os.path.exists(OFFLINE_QUEUE_FILE):
+                try:
+                    with open(OFFLINE_QUEUE_FILE, 'r') as f:
+                        offline_count = len(json.load(f))
+                    if offline_count > 0:
+                        cv2.putText(frame, f"OFFLINE QUEUE: {offline_count} recs", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2, cv2.LINE_AA)
+                except Exception:
+                    pass
+                    
+            # Vẽ overlay thông báo nếu đang chờ nhập liệu terminal không đồng bộ
+            if register_prompt_active:
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (30, h_disp // 2 - 40), (w_disp - 30, h_disp // 2 + 40), (0, 0, 0), -1)
+                cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+                cv2.putText(frame, "NHAP THONG TIN HS TREN TERMINAL CONSOLE...", (45, h_disp // 2 + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2, cv2.LINE_AA)
+            
+            # 4. Hiển thị màn hình camera (nếu không ở chế độ headless)
+            key = 0xFF
+            if not headless_mode:
+                cv2.imshow('Face Recognition Demo', frame)
+                key = cv2.waitKey(1) & 0xFF
+            else:
+                # Tránh sử dụng 100% CPU khi chạy không có màn hình
+                time.sleep(0.05)
+            
+            # 5. Xử lý sự kiện nhấn phím
+            # THOÁT khi nhấn phím 'q' hoặc kết thúc
+            if key == ord('q'):
+                break
+                
+            # ĐĂNG KÝ khuôn mặt mới trực tiếp khi nhấn phím 'r'
+            elif key == ord('r'):
+                if register_mode or register_prompt_active:
+                    print(f"⚠️ {YELLOW}[CẢNH BÁO] Hệ thống đang trong tiến trình đăng ký!{RESET}")
+                elif current_target_vec is not None:
+                    register_prompt_active = True
+                    threading.Thread(target=prompt_registration_input, daemon=True).start()
+                else:
+                    print(f"⚠️ {RED}[CẢNH BÁO] Không phát hiện khuôn mặt nào trước camera để đăng ký!{RESET}")
+                    
+            # Phím nóng chuyển sang chế độ chấm công VÀO
+            elif key == ord('i'):
+                active_mode = "VAO"
+                manual_override = True
+                print(f"🔄 {CYAN}[CHẾ ĐỘ] Đã chuyển sang chấm công: VÀO (Check-In) [Override]{RESET}")
+                
+            # Phím nóng chuyển sang chế độ chấm công RA
+            elif key == ord('o'):
+                active_mode = "RA"
+                manual_override = True
+                print(f"🔄 {CYAN}[CHẾ ĐỘ] Đã chuyển sang chấm công: RA (Check-Out) [Override]{RESET}")
+                
+            # Nhấn phím 'c' để hủy đăng ký khi đang trong chế độ đăng ký
+            elif key == ord('c'):
+                if register_mode:
+                    register_mode = False
+                    register_step = "idle"
+                    print(f"{RED}[HỦY BỎ] Đã hủy đăng ký học sinh.{RESET}\n")
+    except KeyboardInterrupt:
+        print(f"\n{YELLOW}[HỆ THỐNG] Nhận lệnh tắt từ người dùng (Ctrl+C). Đang đóng ứng dụng...{RESET}")
+
             
     # Giải phóng tài nguyên
     cap.release()

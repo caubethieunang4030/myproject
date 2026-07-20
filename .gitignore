@@ -91,6 +91,7 @@ ipython_config.py
 
 # PEP 582; PyProject toml project environments
 __pypackages__/
+backup/
 
 # Celery stuff
 celerybeat-schedule
