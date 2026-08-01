@@ -24,7 +24,19 @@ RESET = "\033[0m"
 BOLD = "\033[1m"
 
 # Khởi tạo Face Mesh từ mediapipe chuyên biệt cho VIDEO stream (static_image_mode=False)
-mp_face_mesh = mp.solutions.face_mesh
+try:
+    import mediapipe.solutions.face_mesh as mp_face_mesh
+except (AttributeError, ModuleNotFoundError, ImportError):
+    try:
+        mp_face_mesh = mp.solutions.face_mesh
+    except (AttributeError, ModuleNotFoundError, ImportError):
+        raise RuntimeError(
+            f"\n{RED}❌ LỖI KHÔNG TÌM THẤY MEDIA PIPE SOLUTIONS:{RESET}\n"
+            f"Phiên bản MediaPipe hiện tại (>=0.10.20 hoặc trên Python 3.13) đã lược bỏ module `solutions` legacy.\n"
+            f"👉 {YELLOW}Vui lòng hạ cấp MediaPipe về phiên bản tương thích bằng lệnh:{RESET}\n"
+            f"   {CYAN}pip install 'mediapipe>=0.10.0,<0.10.20'{RESET}\n"
+        )
+
 face_mesh = mp_face_mesh.FaceMesh(
     static_image_mode=False, 
     max_num_faces=1, 
