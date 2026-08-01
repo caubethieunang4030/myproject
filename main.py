@@ -31,10 +31,11 @@ except (AttributeError, ModuleNotFoundError, ImportError):
         mp_face_mesh = mp.solutions.face_mesh
     except (AttributeError, ModuleNotFoundError, ImportError):
         raise RuntimeError(
-            f"\n{RED}❌ LỖI KHÔNG TÌM THẤY MEDIA PIPE SOLUTIONS:{RESET}\n"
-            f"Phiên bản MediaPipe hiện tại (>=0.10.20 hoặc trên Python 3.13) đã lược bỏ module `solutions` legacy.\n"
-            f"👉 {YELLOW}Vui lòng hạ cấp MediaPipe về phiên bản tương thích bằng lệnh:{RESET}\n"
-            f"   {CYAN}pip install 'mediapipe>=0.10.0,<0.10.20'{RESET}\n"
+            f"\n{RED}❌ LỖI KHÔNG TÌM THẤY MEDIAPIPE SOLUTIONS:{RESET}\n"
+            f"Môi trường venv hiện tại đang dùng Python 3.13 với MediaPipe 0.10.35+ (bị bỏ module `solutions`).\n"
+            f"👉 {YELLOW}Trên Mac, vui lòng kích hoạt môi trường Conda Python 3.10 có sẵn bằng lệnh:{RESET}\n"
+            f"   {CYAN}conda activate pmcc{RESET}\n"
+            f"   {CYAN}python main.py{RESET}\n"
         )
 
 face_mesh = mp_face_mesh.FaceMesh(
