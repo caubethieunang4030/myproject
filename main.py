@@ -449,10 +449,21 @@ def main():
     
     print(f"{GREEN}[OK] ThreadedCamera đã sẵn sàng!{RESET}")
     
-    # Đọc thử một khung hình để lấy kích thước thực tế
-    ret, frame_init = cam_stream.read()
+    # Chờ camera khởi tạo và đọc thử khung hình (chờ tối đa 3.0 giây)
+    print(f"[*] Đang chờ luồng hình ảnh từ camera...")
+    ret, frame_init = False, None
+    for _ in range(30):
+        ret, frame_init = cam_stream.read()
+        if ret and frame_init is not None:
+            break
+        time.sleep(0.1)
+        
     if not ret or frame_init is None:
-        print(f"{RED}[LỖI] Không thể đọc khung hình khởi tạo từ camera.{RESET}")
+        print(f"{RED}[LỖI] Không thể đọc khung hình từ camera.{RESET}")
+        print(f"👉 {YELLOW}Các nguyên nhân có thể xảy ra:{RESET}")
+        print(f"   1. Chưa cấp quyền Camera cho Terminal/Python trong System Settings > Privacy & Security > Camera.")
+        print(f"   2. Camera Index = {cam_index} đang bị chiếm dụng bởi ứng dụng khác (Zoom, Teams, Photo Booth...).")
+        print(f"   3. Thử đổi CAMERA_INDEX=0 trong .env để chuyển sang FaceTime HD Camera hoặc cổng USB khác.")
         cam_stream.stop()
         return
     h_disp, w_disp, _ = frame_init.shape

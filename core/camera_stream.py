@@ -54,10 +54,39 @@ class ThreadedCamera:
         # Giảm thiểu size bộ đệm V4L2 xuống 1 khung hình để chống trễ tích tụ
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-        # Đọc khung hình đầu tiên để khởi tạo
-        self.ret, self.frame = self.cap.read()
+        # Chờ camera khởi động và đọc thử khung hình (thử lại trong tối đa 3 giây)
+        start_t = time.time()
+        while time.time() - start_t < 3.0:
+            ret, frame = self.cap.read()
+            if ret and frame is not None:
+                with self.lock:
+                    self.ret = ret
+                    self.frame = frame.copy()
+                print(f"✅ Camera Index {self.src} khởi động thành công!")
+                break
+            time.sleep(0.1)
+            
         if not self.ret or self.frame is None:
-            print("⚠️ Cảnh báo: Không thể lấy khung hình đầu tiên từ camera.")
+            print(f"⚠️ Cảnh báo: Camera index {self.src} không trả về khung hình. Đang thử quét các camera khác...")
+            for alt_idx in [0, 1, 2, 3]:
+                if alt_idx == self.src:
+                    continue
+                temp_cap = cv2.VideoCapture(alt_idx, config.CAMERA_BACKEND)
+                if temp_cap.isOpened():
+                    for _ in range(10):
+                        r, f = temp_cap.read()
+                        if r and f is not None:
+                            print(f"✅ Đã kết nối thành công sang Camera Index {alt_idx}!")
+                            self.src = alt_idx
+                            self.cap.release()
+                            self.cap = temp_cap
+                            with self.lock:
+                                self.ret = r
+                                self.frame = f.copy()
+                            break
+                        time.sleep(0.1)
+                    if self.ret:
+                        break
 
     def start(self):
         """Khởi chạy luồng đọc camera ngầm."""
