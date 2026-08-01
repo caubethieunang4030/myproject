@@ -438,9 +438,10 @@ def main():
     sync_thread.start()
     
     # Mở camera đa luồng chuyên biệt cho Raspberry Pi 5 & Logitech Brio 100
-    print(f"\n[*] Đang khởi động ThreadedCamera (Logitech Brio 100)...")
+    cam_index = int(os.getenv('CAMERA_INDEX', '1'))
+    print(f"\n[*] Đang khởi động ThreadedCamera (Index={cam_index} - Logitech Brio 100)...")
     cam_stream = ThreadedCamera(
-        src=config.CAMERA_INDEX,
+        src=cam_index,
         width=config.DISPLAY_WIDTH,
         height=config.DISPLAY_HEIGHT,
         fps=config.DISPLAY_FPS
