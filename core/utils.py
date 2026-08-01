@@ -112,3 +112,18 @@ class temporal_motion_tracker:
             return True, float(avg_motion)
         else:
             return False, float(avg_motion)
+
+def batch_cosine_distance(query_vec, candidate_matrix):
+    """
+    Tính khoảng cách Cosine Distance hàng loạt giữa 1 vector truy vấn (1434,)
+    và ma trận candidate_matrix (N, 1434) đã được L2-normalize.
+    Trả về mảng (N,) khoảng cách Cosine: 1.0 - np.dot(candidate_matrix, query_vec).
+    """
+    if candidate_matrix is None or len(candidate_matrix) == 0:
+        return np.array([])
+    # Ma trận nhân với vector đơn vị: (N, 1434) dot (1434,) -> (N,)
+    cos_sim = np.dot(candidate_matrix, query_vec)
+    # Cosine distance = 1 - cos_sim (clipped to [0, 2])
+    distances = 1.0 - cos_sim
+    return np.clip(distances, 0.0, 2.0)
+

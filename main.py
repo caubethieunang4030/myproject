@@ -11,7 +11,9 @@ from dotenv import load_dotenv
 import random
 import threading
 from cryptography.fernet import Fernet
-from core.utils import normalize_vector, extract_liveness_features, check_depth_liveness, temporal_motion_tracker
+import config
+from core.utils import normalize_vector, extract_liveness_features, check_depth_liveness, temporal_motion_tracker, batch_cosine_distance
+from core.camera_stream import ThreadedCamera
 load_dotenv()
 
 GREEN = "\033[92m"
@@ -165,6 +167,22 @@ def load_database(w=640, h=480):
         if conn:
             conn.close()
     return database
+
+def build_db_matrix(database):
+    """
+    Biến đổi dict database thành ma trận NumPy (N, 1434) để tăng tốc độ so sánh vector
+    trên Raspberry Pi 5 bằng phép nhân ma trận hàng loạt (Batch Matrix Multiplication).
+    """
+    matrix_rows = []
+    mapping = []
+    for ma_hs, info in database.items():
+        name = info["name"]
+        for vec in info["vectors"]:
+            matrix_rows.append(vec.flatten())
+            mapping.append((ma_hs, name))
+    if matrix_rows:
+        return np.array(matrix_rows, dtype=np.float32), mapping
+    return None, []
 
 def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector, overwrite=False):
     """
@@ -406,44 +424,41 @@ def main():
     sync_thread = threading.Thread(target=sync_offline_queue, daemon=True)
     sync_thread.start()
     
-    # Mở camera (đọc index từ .env, mặc định là 0 hoặc URL IP camera)
-    camera_index_raw = os.getenv('CAMERA_INDEX', '0')
-    try:
-        camera_index = int(camera_index_raw)
-    except ValueError:
-        camera_index = camera_index_raw
-        
-    print(f"\n[*] Đang khởi động camera: {camera_index}...")
-    cap = cv2.VideoCapture(camera_index)
-    if not cap.isOpened():
-        print(f"{RED}[LỖI] Không thể mở camera (chỉ số: {camera_index}). Vui lòng kiểm tra kết nối.{RESET}")
-        return
-        
-    print(f"{GREEN}[OK] Camera đã sẵn sàng!{RESET}")
+    # Mở camera đa luồng chuyên biệt cho Raspberry Pi 5 & Logitech Brio 100
+    print(f"\n[*] Đang khởi động ThreadedCamera (Logitech Brio 100)...")
+    cam_stream = ThreadedCamera(
+        src=config.CAMERA_INDEX,
+        width=config.DISPLAY_WIDTH,
+        height=config.DISPLAY_HEIGHT,
+        fps=config.DISPLAY_FPS
+    ).start()
+    
+    print(f"{GREEN}[OK] ThreadedCamera đã sẵn sàng!{RESET}")
     
     # Đọc thử một khung hình để lấy kích thước thực tế
-    ret, frame_init = cap.read()
-    if not ret:
+    ret, frame_init = cam_stream.read()
+    if not ret or frame_init is None:
         print(f"{RED}[LỖI] Không thể đọc khung hình khởi tạo từ camera.{RESET}")
-        cap.release()
+        cam_stream.stop()
         return
-    h, w, _ = frame_init.shape
+    h_disp, w_disp, _ = frame_init.shape
     
-    # Load cấu hình tối ưu hóa di động từ .env
+    # Load cấu hình tối ưu hóa di động từ config.py / .env
     mobile_opt = os.getenv('MOBILE_OPTIMIZATION', 'True').lower() in ('true', '1', 'yes')
-    process_w = int(os.getenv('PROCESS_WIDTH', 640))
-    process_h = int(os.getenv('PROCESS_HEIGHT', 480))
-    target_fps = int(os.getenv('TARGET_FPS', 12))
+    process_w = config.PROCESS_WIDTH if mobile_opt else w_disp
+    process_h = config.PROCESS_HEIGHT if mobile_opt else h_disp
+    target_fps = int(os.getenv('TARGET_FPS', '30'))
     headless_mode = os.getenv('HEADLESS_MODE', 'False').lower() in ('true', '1', 'yes')
     
     # Nếu tối ưu hóa di động, dùng kích thước xử lý để đồng bộ hóa chuẩn hóa vector
-    db_w = process_w if mobile_opt else w
-    db_h = process_h if mobile_opt else h
+    db_w = process_w if mobile_opt else w_disp
+    db_h = process_h if mobile_opt else h_disp
     
-    # Load database khuôn mặt từ SQL Server sử dụng tỷ lệ db_w, db_h
+    # Load database khuôn mặt từ SQL Server và dựng ma trận so khớp hàng loạt
     print(f"[*] Đang tải cơ sở dữ liệu khuôn mặt...")
     database = load_database(db_w, db_h)
-    print(f"{GREEN}[OK] Đã tải thành công {len(database)} khuôn mặt.{RESET}")
+    db_matrix, db_mapping = build_db_matrix(database)
+    print(f"{GREEN}[OK] Đã tải thành công {len(database)} học sinh ({len(db_mapping)} vectors).{RESET}")
     
     print(f"{YELLOW}>>> HƯỚNG DẪN ĐIỀU KHIỂN CAM:{RESET}")
     if not headless_mode:
@@ -533,11 +548,15 @@ def main():
                 register_step = "idle"
 
     try:
+        fps_counter = 0
+        fps_start_time = time.time()
+        current_fps = 0.0
+
         while True:
-            ret, frame = cap.read()
-            if not ret:
-                print(f"{RED}[LỖI] Không nhận được khung hình từ camera.{RESET}")
-                break
+            ret, frame = cam_stream.read()
+            if not ret or frame is None:
+                time.sleep(0.005)
+                continue
                 
             current_time = time.time()
             
@@ -697,6 +716,7 @@ def main():
                                 print(f"[*] Dang luu vector 3 goc cua {register_user_name} vao SQL Server...")
                                 if luu_vector_hoc_sinh(register_user_id, register_user_name, register_vectors, overwrite=register_overwrite):
                                     database = load_database(db_w, db_h)
+                                    db_matrix, db_mapping = build_db_matrix(database)
                                     print(f"{GREEN}[THÀNH CÔNG] Đăng ký thành công học sinh: {register_user_name}{RESET}\n")
                                     liveness_status = "approved"
                                     liveness_result_time = time.time()
@@ -735,20 +755,18 @@ def main():
                                 cv2.putText(frame, "QUAY DAU SANG PHAI (->)", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
                                 
                         else:
-                            # --- CHẾ ĐỘ CHẤM CÔNG THƯỜNG (NHẬN DIỆN MỌI GÓC MẶT VÀ CHẤM CÔNG TỨC THỜI) ---
+                            # --- CHẾ ĐỘ CHẤM CÔNG THƯỜNG (SO KHỚP HÀNG LOẠT VỚI BATCH MATRIX MULTIPLICATION) ---
                             best_match_id = "Unknown"
                             best_match_name = "Unknown"
                             min_dist = float('inf')
                             
-                            for ma_hs, info in database.items():
-                                for saved_vec in info["vectors"]:
-                                    dist = 1.0 - np.dot(normalized_target_vec.flatten(), saved_vec.flatten())
-                                    if dist < min_dist:
-                                        min_dist = dist
-                                        if dist < THRESHOLD:
-                                            best_match_id = ma_hs
-                                            best_match_name = info["name"]
-                                            
+                            if db_matrix is not None and len(db_matrix) > 0:
+                                distances = batch_cosine_distance(normalized_target_vec.flatten(), db_matrix)
+                                min_idx = np.argmin(distances)
+                                min_dist = distances[min_idx]
+                                if min_dist < THRESHOLD:
+                                    best_match_id, best_match_name = db_mapping[min_idx]
+                                    
                             print(f"[DEBUG] Khop: {best_match_name} (ID: {best_match_id}) | Cos Dist: {min_dist:.4f} | Nguong THRESHOLD: {THRESHOLD}")
                             
                             if liveness_status in ["approved", "rejected"]:
@@ -838,9 +856,17 @@ def main():
                         _, text, pos, scale, color = drawing
                         cv2.putText(frame, text, pos, cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
             
-            # Vẽ trạng thái chế độ chấm công hiện tại
+            # Vẽ trạng thái chế độ chấm công hiện tại & chỉ số FPS thực tế
             mode_text = f"CHE DO: {'VAO (Check-In)' if active_mode == 'VAO' else 'RA (Check-Out)'}"
             cv2.putText(frame, mode_text, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
+            
+            # Tính toán và hiển thị FPS thực tế cho Raspberry Pi 5
+            fps_counter += 1
+            if current_time - fps_start_time >= 1.0:
+                current_fps = fps_counter / (current_time - fps_start_time)
+                fps_counter = 0
+                fps_start_time = current_time
+            cv2.putText(frame, f"FPS: {current_fps:.1f}", (w_disp - 130, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2, cv2.LINE_AA)
             
             # Vẽ số lượng điểm danh đang lưu ngoại tuyến nếu có
             if os.path.exists(OFFLINE_QUEUE_FILE):
@@ -906,7 +932,7 @@ def main():
 
             
     # Giải phóng tài nguyên
-    cap.release()
+    cam_stream.stop()
     cv2.destroyAllWindows()
     print(f"\n{CYAN}=================================================={RESET}")
     print(f"{CYAN}       ĐÃ ĐÓNG CAMERA & KẾT THÚC DỰ ÁN DEMO       {RESET}")
