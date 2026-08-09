@@ -32,3 +32,7 @@ COSINE_THRESHOLD = float(os.getenv("COSINE_THRESHOLD", 0.025))
 # Attendance logging cooldown (seconds)
 LOG_COOLDOWN_SECONDS = int(os.getenv("LOG_COOLDOWN_SECONDS", 900))
 OFFLINE_QUEUE_FILE = "offline_queue.json"
+
+# Web Sync Settings
+DB_PATH = os.getenv("DB_PATH", "database.db")
+WEB_API_URL = os.getenv("WEB_API_URL", "http://localhost:8080/api/attendance/sync-pi5")
