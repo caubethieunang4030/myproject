@@ -151,4 +151,7 @@ backup/
 
 # Large local folders
 pmcc/
-images/
+# Sample face stills at repo root (keep proposal figures under docs/images/)
+/images/
+!docs/images/
+!docs/images/**
