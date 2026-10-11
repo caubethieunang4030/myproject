@@ -1,126 +1,201 @@
-# Hệ thống Chấm công & Nhận diện Khuôn mặt Chống Giả mạo (Webcam Face Attendance System)
+# Edge AI Biometric Attendance Appliance
 
-Hệ thống chấm công thông minh sử dụng camera laptop kết hợp thư viện **MediaPipe Face Mesh** và cơ sở dữ liệu **SQL Server**. Hệ thống được tối ưu hóa cho tốc độ điểm danh tức thời (< 0.2s) đồng thời đảm bảo bảo mật sinh trắc học tuyệt đối (Privacy by Design) và tính sẵn sàng cao trước các sự cố mạng.
+Autonomous, on-premise face-attendance system for schools and SMEs. It runs computer vision on a **Raspberry Pi 5** (or a development laptop), stores **encrypted landmark vectors** (not raw photos), resists common **2D photo / phone-screen spoofs**, and keeps checking people in during **network outages** via SQLite WAL + an offline JSON queue.
 
----
+**Research proposal (full write-up):** [`docs/RESEARCH_PROPOSAL.md`](docs/RESEARCH_PROPOSAL.md)
 
-## 🌟 Tính năng nổi bật
-
-1. **Đăng ký đa góc mặt (Multi-Pose Enrollment):**
-   - Hướng dẫn người dùng quét đủ 3 hướng mặt: **Nhìn thẳng**, **Quay trái** và **Quay phải**.
-   - Lưu trữ tập hợp 3 vectơ đặc trưng dưới dạng JSON để hỗ trợ so khớp góc nghiêng khi chấm công.
-2. **Nháy mắt xác thực (Blink-to-Register):**
-   - Ở bước nhìn thẳng khi đăng ký, hệ thống bắt buộc người dùng thực hiện động tác **nháy mắt** (nhắm mắt rồi mở mắt).
-   - Ngăn chặn hoàn toàn việc sử dụng ảnh in hoặc ảnh chụp trên điện thoại để đăng ký học sinh giả mạo.
-3. **Mã hóa dữ liệu Sinh trắc học (AES-256 Biometric Encryption):**
-   - Tự động tạo và lưu trữ khóa mã hóa `ENCRYPTION_KEY` an toàn trong `.env`.
-   - Toàn bộ dữ liệu vectơ khuôn mặt được mã hóa bằng thuật toán **AES-256 (Fernet)** trước khi lưu xuống SQL Server.
-   - Hỗ trợ **tương thích ngược hoàn hảo**: tự động phát hiện và giải mã dữ liệu cũ chưa mã hóa mà không gây gián đoạn hệ thống.
-4. **Phân loại Chấm công Vào/Ra (Check-In/Check-Out):**
-   - Mặc định tự động xác định loại chấm công dựa trên thời gian thực hệ thống (Trước 12:00: `VAO`, Từ 12:00: `RA`).
-   - Cho phép giám thị/giáo viên thay đổi chế độ chấm công thủ công bằng phím nóng **`i`** (VÀO) và **`o`** (RA).
-   - Hiển thị trực quan chế độ chấm công hiện tại ngay trên màn hình camera.
-5. **Đồng bộ Ngoại tuyến tự động (Offline Local Queue & Background Sync):**
-   - Nếu mất kết nối với SQL Server, hệ thống tự động ghi nhận điểm danh vào hàng đợi cục bộ `offline_queue.json` bảo toàn đúng thời gian quét thực tế.
-   - Hiển thị số lượng log đang chờ đồng bộ `OFFLINE QUEUE: X recs` trên màn hình camera.
-   - Một luồng nền (background daemon thread) chạy song song quét mỗi 10 giây, tự động đồng bộ hàng loạt (batch insert) lên SQL Server khi có mạng lại và tự dọn dẹp bộ nhớ đệm local.
-6. **Thuật toán so khớp Cosine Distance & Chuẩn hóa L2:**
-   - Landmark được chuyển về không gian pixel thực tế và L2-normalize thành vectơ đơn vị 1D kích thước 1434.
-   - So khớp bằng khoảng cách Cosine `dist = 1.0 - np.dot(...)` với ngưỡng nghiêm ngặt `THRESHOLD = 0.025` (độ lệch góc tối đa 2.5%, tương đương độ tương đồng CosSim >= 97.5%).
-   - Triệt tiêu hoàn toàn sai lệch do khoảng cách camera xa/gần, góc nghiêng khuôn mặt, và biến động ánh sáng.
-7. **Chống nhiễu & Cooldown:**
-   - Chỉ ghi nhận chấm công khi khớp khuôn mặt ổn định trong 3 khung hình liên tiếp.
-   - Cơ chế cooldown chống ghi trùng lặp chấm công (mặc định 15 phút - 900 giây).
+**GitHub Repository:** https://github.com/caubethieunang4030/myproject.git
 
 ---
 
-## 🛠️ Cấu trúc dự án
+## Why this project exists
+
+Cloud attendance products often upload biometric data and stop working when Wi-Fi drops. Desktop vision scripts also struggle on small ARM boards (camera lag, CPU overload, easy spoofing). This repository implements a four-technique appliance designed around those constraints:
+
+| Technique | Job in one sentence |
+|---|---|
+| **Threaded V4L2/MJPG capture** | Always process the *latest* frame without multi-second USB lag |
+| **1434-D MediaPipe mesh matching** | Recognize identity from a normalized math vector, not a stored photo |
+| **Heuristic liveness** | Reject flat paper/phone attacks using depth, motion, and blink checks |
+| **SQLite WAL + offline queue** | Never lose a check-in when the DB/network path fails |
+
+---
+
+## Repository architecture (monorepo)
+
+This is a **monorepo**: runtime code, Pi setup scripts, docs, and sample assets live in one Git repository so hardware knobs, thresholds, and documentation evolve together.
 
 ```text
-├── main.py                 # Luồng chính: hiển thị cam, đăng ký góc mặt, điểm danh & đồng bộ
-├── delete_student.py       # Công cụ CLI nhanh để xóa dữ liệu học sinh/lịch sử khỏi DB
-├── .env                    # Lưu cấu hình kết nối SQL Server & Khóa mã hóa AES-256
-├── requirements.txt        # Danh sách các thư viện Python cần thiết
+myproject/
+├── main.py                  # App entry: camera → mesh → liveness → match → storage
+├── delete_student.py        # Privacy / opt-out: delete a student and related logs
+├── sync_to_web.py           # (Pi branch) optional SQLite → web API sync helper
+├── config.py                # Resolutions, camera backend, cosine threshold, cooldown
+├── setup_rpi5.sh            # Bootstrap script for Raspberry Pi OS (Bookworm)
+├── requirements.txt         # General / laptop dependency pin set
+├── requirements-rpi5.txt    # ARM64-safe pins (NumPy 1.x, MediaPipe band)
+├── .env.example             # Safe env template (never commit real secrets)
 ├── core/
-│   ├── anti_fake.py        # Chuẩn hóa L2 vector landmark & trích xuất tính năng liveness (chớp mắt, xoay đầu)
-│   └── compare_face.py     # Script so khớp khuôn mặt tĩnh demo từ ảnh
+│   ├── camera_stream.py     # ThreadedCamera (V4L2 + MJPG, buffer size 1)
+│   ├── utils.py             # normalize_vector, depth liveness, temporal motion, EAR
+│   ├── compare_face.py      # Static image comparison utility
+│   ├── face_detection.py    # Supporting experiments / helpers
+│   ├── facial_landmark.py
+│   └── landmark_utils.py
+├── docs/
+│   ├── RESEARCH_PROPOSAL.md # Capstone research proposal (English)
+│   └── images/              # Hardware + landmark figures for the proposal
+├── images/                  # Early still-image matching samples
+└── README.md                # This file
 ```
+
+### Why monorepo (and not another layout)?
+
+- **Polyrepo** (split vision / firmware / docs) adds version drift for a solo student project and makes advisor review harder.
+- **Multi-package SDK layout** is premature — the deliverable is an integrated appliance, not a published library.
+- **Monorepo** keeps camera ingestion, liveness thresholds, DB schema, setup scripts, and the research write-up in **one commit history**, which matches how the system was tuned (see proposal Section 5).
 
 ---
 
-## 💾 Thiết kế Cơ sở dữ liệu (SQL Server)
+## Features
 
-Hệ thống sử dụng cơ sở dữ liệu SQL Server với cấu trúc bảng viết thường toàn bộ:
+1. **Multi-pose enrollment** — straight / left / right captures stored as JSON vector sets.
+2. **Blink-to-register** — enrollment requires a closed→open Eye Aspect Ratio transition to block photo registration.
+3. **Runtime liveness** — Z-depth dispersion on rigid landmarks + ICD-normalized temporal motion.
+4. **Cosine matching on L2-normalized 1434-D vectors** — default `COSINE_THRESHOLD = 0.025` (≥97.5% similarity) on the optimized path.
+5. **Encrypted vectors at rest** — Fernet (**AES-128-CBC + HMAC**); `ENCRYPTION_KEY` auto-created in `.env` on first run.
+6. **Offline-first logging** — on write failure, append to `offline_queue.json`; a daemon syncs about every 10 seconds with atomic rename/merge.
+7. **Check-in / check-out modes** — auto by time of day, or hotkeys `i` / `o`.
+8. **Cooldown** — default 15 minutes to suppress duplicate taps.
 
-### 1. Bảng lưu trữ mẫu khuôn mặt (`vectormathocsinh`)
-```sql
-CREATE TABLE vectormathocsinh (
-    mahocsinh VARCHAR(50) PRIMARY KEY,
-    tenhocsinh NVARCHAR(255) NOT NULL,
-    facevector VARCHAR(MAX) NOT NULL -- Chứa chuỗi mã hóa AES-256 (Fernet) của dữ liệu góc mặt JSON
-);
-```
-
-### 2. Bảng nhật ký điểm danh (`thongtinchamcong`)
-```sql
-CREATE TABLE thongtinchamcong (
-    id INT IDENTITY(1,1) PRIMARY KEY,
-    mahocsinh VARCHAR(50) FOREIGN KEY REFERENCES vectormathocsinh(mahocsinh),
-    thoigianquet DATETIME DEFAULT GETDATE(),
-    loai_chamcong NVARCHAR(10) DEFAULT 'VAO' -- Giá trị nhận diện: 'VAO' hoặc 'RA'
-);
-```
+> Note: `main` historically used SQL Server (`pymssql`) for lab/internship setups. The Raspberry Pi appliance path (feature branch / Pi deployment) uses **local SQLite WAL** (`database.db`). Both keep the same vector + offline-queue ideas; see `docs/RESEARCH_PROPOSAL.md` §4.4 for the design rationale.
 
 ---
 
-## 🚀 Hướng dẫn cài đặt & Vận hành
+## Quick start (development machine)
 
-### 1. Cài đặt môi trường Python
-Khuyến nghị sử dụng Conda với Python `3.10`:
+### 1) Python environment
+
 ```bash
-# Kích hoạt môi trường (ví dụ môi trường pmcc của bạn)
+# Example: conda env named pmcc, Python 3.10 recommended
 conda activate pmcc
-
-# Cài đặt các thư viện cần thiết
 pip install -r requirements.txt
 ```
 
-### 2. Cấu hình biến môi trường
-Tạo file `.env` tại thư mục gốc của dự án với các thông tin kết nối tới SQL Server:
+### 2) Environment file
+
+Copy `.env.example` to `.env` and fill secrets locally:
+
 ```env
 DB_SERVER=127.0.0.1
 DB_PORT=1433
 DB_USER=sa
-DB_PASSWORD=Mật_khẩu_SQL_Server_của_bạn
+DB_PASSWORD=your_password_here
 DB_DATABASE=chamcongdatabase
+CAMERA_INDEX=0
 ```
-*(Lưu ý: Khóa `ENCRYPTION_KEY` sẽ tự động được sinh ra và chèn vào file `.env` khi chạy chương trình lần đầu).*
 
-### 3. Chạy ứng dụng Chấm công
-Khởi động ứng dụng bằng lệnh:
+`ENCRYPTION_KEY` is generated automatically on first launch if missing.
+
+### 3) Run
+
 ```bash
 python main.py
 ```
 
-- **Chấm công:** Chỉ cần đứng trước camera, hệ thống sẽ tự động nhận diện và ghi nhận chấm công vào SQL Server (hoặc hàng đợi offline nếu mất kết nối) trong chưa đầy 0.2s.
-- **Phím điều khiển:**
-  - Nhấn phím **`q`** trên màn hình camera để **THOÁT**.
-  - Nhấn phím **`r`** để **ĐĂNG KÝ HỌC SINH MỚI** trực tiếp.
-  - Nhấn phím **`i`** để chọn chế độ chấm công **VÀO (Check-In)**.
-  - Nhấn phím **`o`** để chọn chế độ chấm công **RA (Check-Out)**.
-  - Nhấn phím **`c`** để **HỦY** phiên đăng ký hiện tại.
+**Hotkeys**
 
-- **Quy trình Đăng ký mới:**
-  1. Nhấn phím **`r`** trên camera.
-  2. Nhập `Mã học sinh` và `Tên học sinh` trên terminal.
-  3. Nhìn thẳng vào camera và **nháy mắt** để xác thực liveness chống giả mạo bằng ảnh.
-  4. Quay đầu nhẹ sang trái rồi quay đầu nhẹ sang phải theo hướng dẫn hiển thị trên camera.
-  5. Đăng ký hoàn thành, dữ liệu sẽ tự động được mã hóa và đồng bộ lên database.
-  *Phiên đăng ký sẽ tự động hủy nếu sau 20 giây không quét đủ các góc mặt.*
+| Key | Action |
+|---|---|
+| `q` | Quit |
+| `r` | Register a new student |
+| `i` | Force check-in mode (`VAO`) |
+| `o` | Force check-out mode (`RA`) |
+| `c` | Cancel an in-progress registration |
 
-### 4. Xóa thông tin học sinh
-Để xóa dữ liệu học sinh và lịch sử chấm công liên quan:
+**Enrollment flow**
+
+1. Press `r`, enter student ID + name in the terminal.
+2. Look straight and **blink** (closed then open).
+3. Turn slightly left, then right, as on-screen prompts indicate.
+4. Vectors are encrypted and stored. Registration times out after ~20 seconds if incomplete.
+
+### 4) Delete a student (opt-out / purge)
+
 ```bash
-python delete_student.py <ma_hoc_sinh>
-# Ví dụ: python delete_student.py hs001
+python delete_student.py <student_id>
+# example:
+python delete_student.py hs001
 ```
+
+---
+
+## Raspberry Pi 5 deployment (appliance path)
+
+On Raspberry Pi OS Bookworm:
+
+```bash
+chmod +x setup_rpi5.sh
+./setup_rpi5.sh
+source venv/bin/activate
+python main.py
+```
+
+Important Pi settings live in `config.py` / environment:
+
+- Capture: 1280×720 @ 30 FPS, MJPG, `CAP_PROP_BUFFERSIZE = 1`
+- Inference resize: 640×480
+- Camera index via `CAMERA_INDEX` (Logitech Brio 100 often appears as a non-zero index)
+
+Use `requirements-rpi5.txt` on ARM64 to avoid NumPy 2.x / MediaPipe ABI breaks.
+
+Hardware diagram and BOM: see [`docs/RESEARCH_PROPOSAL.md`](docs/RESEARCH_PROPOSAL.md) §4.1 and §6.2.
+
+---
+
+## Database sketch
+
+**Student vectors — `vectormathocsinh`**
+
+| Column | Meaning |
+|---|---|
+| `mahocsinh` | Student ID (primary key) |
+| `tenhocsinh` | Display name |
+| `facevector` | Fernet-encrypted JSON of pose vectors |
+
+**Attendance — `thongtinchamcong`**
+
+| Column | Meaning |
+|---|---|
+| `id` | Row id |
+| `mahocsinh` | Student ID |
+| `loai_chamcong` | `VAO` / `RA` |
+| `thoigianquet` | Timestamp of scan |
+
+---
+
+## Privacy notes
+
+- Store landmark vectors, not photos/videos of check-ins.
+- Keep `.env` out of Git (see `.gitignore`).
+- Honor opt-out with `delete_student.py`.
+- Purge pilot data after the capstone defense as described in the proposal ethics section.
+
+---
+
+## Documentation map
+
+| Document | Contents |
+|---|---|
+| [`docs/RESEARCH_PROPOSAL.md`](docs/RESEARCH_PROPOSAL.md) | Full research proposal: techniques, architecture, liveness “skeleton,” storage rationale, testing & timeline |
+| [`docs/images/`](docs/images/) | Hardware appliance figure + facial landmark liveness figure |
+
+---
+
+## References (short list)
+
+- MediaPipe Face Mesh / perception pipelines (Lugaresi et al., 2019)
+- Eye Aspect Ratio blink detection (Soukupová & Čech, 2016)
+- SQLite WAL documentation
+- PyCA Fernet specification
+- Full reference list: [`docs/RESEARCH_PROPOSAL.md`](docs/RESEARCH_PROPOSAL.md) §7
