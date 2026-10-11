@@ -96,25 +96,32 @@ def set_cell_borders(cell):
 
 
 def add_page_number(section):
+    """Footer style matching screenshots: Duy Anh Huynh | Edge AI Research Proposal • N"""
     footer = section.footer
     footer.is_linked_to_previous = False
     p = footer.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run("Page ")
-    set_run_font(run, "Arial", 9, color=RGBColor(0x66, 0x66, 0x66))
 
-    fld1 = OxmlElement("w:fldChar")
-    fld1.set(qn("w:fldCharType"), "begin")
+    run = p.add_run("Duy Anh Huynh | Edge AI Research Proposal • ")
+    set_run_font(run, "Times New Roman", 9, color=RGBColor(0x55, 0x55, 0x55))
+
+    # PAGE field
+    fld_begin = OxmlElement("w:fldChar")
+    fld_begin.set(qn("w:fldCharType"), "begin")
     instr = OxmlElement("w:instrText")
     instr.set(qn("xml:space"), "preserve")
     instr.text = " PAGE "
-    fld2 = OxmlElement("w:fldChar")
-    fld2.set(qn("w:fldCharType"), "end")
+    fld_sep = OxmlElement("w:fldChar")
+    fld_sep.set(qn("w:fldCharType"), "separate")
+    fld_end = OxmlElement("w:fldChar")
+    fld_end.set(qn("w:fldCharType"), "end")
+
     r = p.add_run()
-    r._r.append(fld1)
+    r._r.append(fld_begin)
     r._r.append(instr)
-    r._r.append(fld2)
-    set_run_font(r, "Arial", 9, color=RGBColor(0x66, 0x66, 0x66))
+    r._r.append(fld_sep)
+    r._r.append(fld_end)
+    set_run_font(r, "Times New Roman", 9, color=RGBColor(0x55, 0x55, 0x55))
 
 
 def configure_styles(doc: Document):
@@ -131,10 +138,11 @@ def configure_styles(doc: Document):
     pf.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
     pf.line_spacing = 1.15
 
+    # Match screenshot look: blue serif-ish section titles (use Georgia for H1/H2)
     heading_specs = {
-        "Heading 1": (18, True, BLUE, Pt(0), Pt(12)),
-        "Heading 2": (14, True, BLUE, Pt(16), Pt(8)),
-        "Heading 3": (12, True, BLUE, Pt(12), Pt(6)),
+        "Heading 1": (20, True, BLUE, Pt(0), Pt(14)),
+        "Heading 2": (15, True, BLUE, Pt(18), Pt(8)),
+        "Heading 3": (12.5, True, BLUE, Pt(12), Pt(6)),
         "Heading 4": (11, True, DARK_BLUE, Pt(10), Pt(4)),
     }
     for name, (size, bold, color, before, after) in heading_specs.items():
@@ -285,13 +293,18 @@ def add_heading_styled(doc, text: str, level: int):
     clean = INLINE_CODE_RE.sub(r"\1", clean)
     clean = HTML_TAG_RE.sub("", clean)
     clean = strip_md_noise(clean)
+    # Screenshot style: major section titles in ALL CAPS
+    if level <= 2:
+        clean = clean.upper()
     p = doc.add_heading(clean, level=level)
     # Re-apply blue on all runs (python-docx theme can override)
     color = BLUE if level <= 3 else DARK_BLUE
+    font_name = "Georgia" if level <= 2 else "Arial"
     for run in p.runs:
         run.font.color.rgb = color
-        run.font.name = "Arial"
-        run._element.rPr.rFonts.set(qn("w:eastAsia"), "Arial")
+        run.font.name = font_name
+        run.bold = True
+        run._element.rPr.rFonts.set(qn("w:eastAsia"), font_name)
     return p
 
 
@@ -502,21 +515,29 @@ def convert_md_to_docx():
         if om:
             p = doc.add_paragraph(style="List Number")
             add_inline_runs(p, om.group(2))
+            if REV_SPAN_RE.search(om.group(2)):
+                shade_paragraph(p, "FCE4D6")
             i += 1
             continue
 
         # Unordered list
         if re.match(r"^[-*]\s+", line):
+            body = re.sub(r"^[-*]\s+", "", line)
             p = doc.add_paragraph(style="List Bullet")
-            add_inline_runs(p, re.sub(r"^[-*]\s+", "", line))
+            add_inline_runs(p, body)
+            if REV_SPAN_RE.search(body):
+                shade_paragraph(p, "FCE4D6")
             i += 1
             continue
 
         # Sub-bullet indented
         if re.match(r"^\s{2,}[-*]\s+", line):
+            body = re.sub(r"^\s*[-*]\s+", "", line)
             p = doc.add_paragraph(style="List Bullet")
             p.paragraph_format.left_indent = Cm(1.0)
-            add_inline_runs(p, re.sub(r"^\s*[-*]\s+", "", line))
+            add_inline_runs(p, body)
+            if REV_SPAN_RE.search(body):
+                shade_paragraph(p, "FCE4D6")
             i += 1
             continue
 
@@ -551,10 +572,13 @@ def convert_md_to_docx():
         # Title-ish bold-only lines under H1
         if text.startswith("**") and text.endswith("**") and text.count("**") == 2:
             run = p.add_run(text[2:-2])
-            set_run_font(run, "Arial", 12, bold=True, color=DARK_BLUE)
+            set_run_font(run, "Georgia", 13, bold=True, color=DARK_BLUE)
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         else:
             add_inline_runs(p, text)
+            # Peach/orange shading like screenshots for revision-marked paragraphs
+            if REV_SPAN_RE.search(text):
+                shade_paragraph(p, "FCE4D6")
 
     doc.save(OUT_PATH)
     return OUT_PATH
