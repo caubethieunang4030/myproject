@@ -377,10 +377,10 @@ The project developed during Summer 2026 through a 12-week research and explorat
 9. General Assembly of the State of Illinois. (2008). Biometric Information Privacy Act (BIPA): 740 ILCS 14/.
 
 **Video Technical Resources & Reference Links**
-- Nền tảng Cơ sở Dữ liệu & Hệ thống: https://www.youtube.com/watch?v=V7ZU0RKtSoQ
-- Kiến trúc & Kỹ thuật Lập trình: https://www.youtube.com/watch?v=uHpzKcm8qh0
-- Xử lý Dữ liệu & Hệ thống Backend: https://www.youtube.com/watch?v=cv7EPNXXTxA
+- Database platform and systems: https://www.youtube.com/watch?v=V7ZU0RKtSoQ
+- Architecture and programming technique: https://www.youtube.com/watch?v=uHpzKcm8qh0
+- Data processing and the backend system: https://www.youtube.com/watch?v=cv7EPNXXTxA
 - Video Streaming & Camera Protocols: https://www.youtube.com/watch?v=_FErnBwMpj8
-- Triển khai Hệ thống & Tối ưu hóa: https://www.youtube.com/watch?v=4FWrmuKQq1s
+- System deployment and optimization: https://www.youtube.com/watch?v=4FWrmuKQq1s
 - Linux Kernel & Hardware Interfaces: https://www.youtube.com/watch?v=sRNN_wvw1Zo
 - Object detection for Web — ML on Web with MediaPipe (Episode 1 → 12): https://www.youtube.com/watch?v=LF7Lgz4_lus

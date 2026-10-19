@@ -8,7 +8,7 @@ vector_file = "facial_vector.txt"
 
 image = cv2.imread(input_image)
 if image is None:
-    raise FileNotFoundError(f"Không đọc được ảnh: {input_image}")
+    raise FileNotFoundError(f"Could not read image: {input_image}")
 
 rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
@@ -44,13 +44,13 @@ with mp_face_mesh.FaceMesh(
             with open(vector_file, "w") as f:
                 f.write(",".join(map(str, face_vector)))
             
-            print(f"--- Đã lưu vector ({len(face_vector)} con số) vào file {vector_file} ---")
+            print(f"--- Saved vector ({len(face_vector)} numbers) to file {vector_file} ---")
     else:
-        print("Không phát hiện khuôn mặt nào.")
+        print("No face detected.")
 
 
 cv2.imwrite(output_image, image)
-print(f"Đã lưu ảnh kết quả: {output_image}")
+print(f"Saved the result image: {output_image}")
 cv2.imshow("Facial Landmarks", image)
 cv2.waitKey(0)
 cv2.destroyAllWindows()

@@ -21,7 +21,7 @@ YELLOW = "\033[93m"
 RESET = "\033[0m"
 BOLD = "\033[1m"
 
-# Khởi tạo Face Mesh từ mediapipe chuyên biệt cho VIDEO stream (static_image_mode=False)
+# Create a MediaPipe Face Mesh configured for a video stream (static_image_mode=False)
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(
     static_image_mode=False, 
@@ -33,7 +33,7 @@ face_mesh = mp_face_mesh.FaceMesh(
 
 db_password = os.getenv('DB_PASSWORD')
 if not db_password:
-    raise ValueError("LỖI: Biến môi trường DB_PASSWORD chưa được cấu hình trong file .env!")
+    raise ValueError("ERROR: the DB_PASSWORD environment variable is not set in the .env file!")
 
 db_config = {
     'server': os.getenv('DB_SERVER', '127.0.0.1'),
@@ -43,7 +43,7 @@ db_config = {
     'database': os.getenv('DB_DATABASE', 'chamcongdatabase')
 }
 
-# Hàm khởi tạo và lấy công cụ mã hóa AES-256 (Fernet)
+# Create and return the AES-256 (Fernet) cipher
 def get_encryption_suite():
     key = os.getenv("ENCRYPTION_KEY")
     if not key:
@@ -54,23 +54,23 @@ def get_encryption_suite():
                 f.write(f"\nENCRYPTION_KEY={new_key}\n")
             os.environ["ENCRYPTION_KEY"] = new_key
             key = new_key
-            print(f"🔑 Đã tự động tạo khóa mã hóa sinh trắc học và lưu vào .env")
+            print(f"🔑 Generated a biometric encryption key and saved it to .env")
         except Exception as e:
-            raise RuntimeError(f"Không thể khởi tạo và ghi ENCRYPTION_KEY vào .env: {e}")
+            raise RuntimeError(f"Could not create ENCRYPTION_KEY or write it to .env: {e}")
     return Fernet(key.encode() if isinstance(key, str) else key)
 
 cipher_suite = get_encryption_suite()
 
-# Ngưỡng khoảng cách Cosine Distance (độ lệch tối đa 2.5%, tương đương tương đồng CosSim >= 97.5%)
+# Cosine-distance threshold (at most 2.5% difference, cosine similarity >= 97.5%)
 THRESHOLD = 0.025  
 
-# Cấu hình hàng đợi ngoại tuyến (Offline Queue)
+# Offline queue configuration
 OFFLINE_QUEUE_FILE = "offline_queue.json"
 offline_lock = threading.Lock()
 
 def upgrade_db_schema():
     """
-    Tự động nâng cấp bảng thongtinchamcong để thêm cột loai_chamcong nếu chưa tồn tại.
+    Add the loai_chamcong column to thongtinchamcong when it is missing.
     """
     conn = None
     try:
@@ -92,21 +92,21 @@ def upgrade_db_schema():
             END
         """)
         conn.commit()
-        print(f"🚀 {GREEN}[OK] Đã kiểm tra và đồng bộ cấu trúc bảng thongtinchamcong (cột loai_chamcong).{RESET}")
+        print(f"🚀 {GREEN}[OK] Checked and updated the thongtinchamcong table (loai_chamcong column).{RESET}")
     except Exception as e:
-        print(f"⚠️ {YELLOW}[CẢNH BÁO] Không thể nâng cấp tự động schema DB: {e}.{RESET}")
+        print(f"⚠️ {YELLOW}[WARNING] Could not upgrade the database schema automatically: {e}.{RESET}")
     finally:
         if conn:
             conn.close()
 
-# Quản lý cooldown ghi log chấm công (15 phút = 900 giây)
+# Cooldown for attendance logs (15 minutes = 900 seconds)
 LOG_COOLDOWN_SECONDS = 900
-last_logged_time = {} # Lưu {name: timestamp}
+last_logged_time = {} # Stores {name: timestamp}
 
 def load_database(w=640, h=480):
     """
-    Tải cơ sở dữ liệu khuôn mặt từ bảng vectormathocsinh của SQL Server.
-    Cấu trúc trả về: {mahocsinh: {"name": tenhocsinh, "vectors": [np_array, ...]}}
+    Load face templates from the vectormathocsinh table in SQL Server.
+    Return shape: {mahocsinh: {"name": tenhocsinh, "vectors": [np_array, ...]}}
     """
     database = {}
     conn = None
@@ -120,7 +120,7 @@ def load_database(w=640, h=480):
         )
         cursor = conn.cursor()
         
-        # câu lệnh sql viết thường toàn bộ tên bảng và tên cột
+        # SQL uses lowercase table and column names
         sql_query = "select mahocsinh, tenhocsinh, facevector from vectormathocsinh"
         cursor.execute(sql_query)
         rows = cursor.fetchall()
@@ -128,25 +128,25 @@ def load_database(w=640, h=480):
         for row in rows:
             ma_hs, ten_hs, facevector_str = row
             try:
-                # Giải mã AES-256 dữ liệu sinh trắc học
+                # Decrypt the AES-256 biometric data
                 try:
                     decrypted_str = cipher_suite.decrypt(facevector_str.encode()).decode()
                     data = json.loads(decrypted_str)
                 except Exception:
-                    # Tương thích ngược: nếu giải mã lỗi, đọc thẳng dạng plain text JSON
-                    print(f"⚠️ {RED}[SECURITY] HS {ma_hs}: Đọc vector dạng plaintext - Có thể dữ liệu cũ chưa mã hóa hoặc đã bị sửa đổi!{RESET}")
+                    # Backward compatible: if decryption fails, read the value as plain JSON
+                    print(f"⚠️ {RED}[SECURITY] HS {ma_hs}: Read the vector as plaintext. It may be old unencrypted data, or it may have been modified!{RESET}")
                     data = json.loads(facevector_str)
                 
                 vectors = []
                 if isinstance(data, dict):
-                    # Thiết kế mới: chứa các góc xoay đầu khác nhau
+                    # New format: holds several head-turn angles
                     for key in ["straight", "left", "right"]:
                         if key in data:
                             vec = np.array(data[key], dtype=np.float32)
                             if vec.size == 1434:
                                 vectors.append(normalize_vector(vec.reshape(478, 3), w, h))
                 else:
-                    # Thiết kế cũ: chỉ chứa 1 vector thẳng
+                    # Old format: holds a single straight-on vector
                     vec = np.array(data, dtype=np.float32)
                     if vec.size == 1434:
                         vectors.append(normalize_vector(vec.reshape(478, 3), w, h))
@@ -157,10 +157,10 @@ def load_database(w=640, h=480):
                         "vectors": vectors
                     }
             except Exception as ex:
-                print(f"lỗi khi phân giải vector cho học sinh {ten_hs} ({ma_hs}): {ex}")
+                print(f"error while parsing the vector for student {ten_hs} ({ma_hs}): {ex}")
                 
     except Exception as e:
-        print(f"lỗi khi kết nối database để tải vector: {e}")
+        print(f"error while connecting to the database to load vectors: {e}")
     finally:
         if conn:
             conn.close()
@@ -168,7 +168,7 @@ def load_database(w=640, h=480):
 
 def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector, overwrite=False):
     """
-    Lưu thông tin học sinh và mảng vector mẫu đã mã hóa AES-256 vào SQL Server.
+    Save the student and the AES-256-encrypted template vectors to SQL Server.
     """
     conn = None
     try:
@@ -181,20 +181,20 @@ def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector, overwrite=False):
         )
         cursor = conn.cursor()
         
-        # chuyển mảng vector số thực thành chuỗi text json sạch và mã hóa bảo mật sinh trắc
+        # turn the float vector into clean JSON text and encrypt it
         chuoi_vector = json.dumps(mang_vector)
         chuoi_vector_encrypted = cipher_suite.encrypt(chuoi_vector.encode()).decode()
         
-        # Kiểm tra xem mã học sinh đã tồn tại trong DB chưa
+        # Check whether this student id already exists
         cursor.execute("select count(*) from vectormathocsinh where mahocsinh = %s", (ma_hs,))
         exists = cursor.fetchone()[0] > 0
         
         if exists:
             if not overwrite:
-                print(f"lỗi: Mã học sinh '{ma_hs}' đã tồn tại trong database.")
+                print(f"error: student id '{ma_hs}' already exists in the database.")
                 return False
             
-            # Câu lệnh cập nhật viết thường toàn bộ tên bảng và tên cột
+            # UPDATE statement; table and column names are lowercase
             sql_query = """
                 update vectormathocsinh 
                 set tenhocsinh = %s, facevector = %s 
@@ -202,20 +202,20 @@ def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector, overwrite=False):
             """
             cursor.execute(sql_query, (ten_hs, chuoi_vector_encrypted, ma_hs))
             conn.commit()
-            print(f"🚀 đã cập nhật thành công vector cho học sinh: {ten_hs}")
+            print(f"🚀 updated the vector for student: {ten_hs}")
             return True
         else:
-            # Câu lệnh chèn viết thường toàn bộ tên bảng và tên cột
+            # INSERT statement; table and column names are lowercase
             sql_query = """
                 insert into vectormathocsinh (mahocsinh, tenhocsinh, facevector) 
                 values (%s, %s, %s)
             """
             cursor.execute(sql_query, (ma_hs, ten_hs, chuoi_vector_encrypted))
             conn.commit()
-            print(f"🚀 đã lưu thành công vector cho học sinh: {ten_hs}")
+            print(f"🚀 saved the vector for student: {ten_hs}")
             return True
     except Exception as e:
-        print(f"lỗi khi lưu vector: {e}")
+        print(f"error while saving the vector: {e}")
         return False
     finally:
         if conn:
@@ -223,7 +223,7 @@ def luu_vector_hoc_sinh(ma_hs, ten_hs, mang_vector, overwrite=False):
 
 def save_offline_log(ma_hs, loai_chamcong):
     """
-    Lưu log điểm danh ngoại tuyến vào file JSON cục bộ khi mất kết nối DB.
+    Write an offline attendance log to a local JSON file when the database is unreachable.
     """
     record = {
         "mahocsinh": ma_hs,
@@ -242,18 +242,18 @@ def save_offline_log(ma_hs, loai_chamcong):
         try:
             with open(OFFLINE_QUEUE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
-            print(f"⚠️ {YELLOW}[OFFLINE] Đã lưu điểm danh ngoại tuyến cho {ma_hs} ({loai_chamcong}) vào file local.{RESET}")
+            print(f"⚠️ {YELLOW}[OFFLINE] Saved an offline attendance record for {ma_hs} ({loai_chamcong}) to the local file.{RESET}")
         except Exception as e:
-            print(f"❌ Không thể lưu file offline: {e}")
+            print(f"❌ Could not write the offline file: {e}")
 
 def sync_offline_queue():
     """
-    Hàm luồng chạy nền tự động đồng bộ hàng đợi ngoại tuyến lên SQL Server khi có mạng trở lại.
-    Tránh race condition bằng cách đổi tên file sang file tạm trong lock trước khi đồng bộ.
+    Background thread that syncs the offline queue to SQL Server when the network returns.
+    Avoid a race by renaming the file to a temp file under the lock before syncing.
     """
     SYNC_TEMP_FILE = "offline_queue_sync.json"
     while True:
-        time.sleep(10) # Kiểm tra mỗi 10 giây
+        time.sleep(10) # Check every 10 seconds
         
         if not os.path.exists(OFFLINE_QUEUE_FILE) and not os.path.exists(SYNC_TEMP_FILE):
             continue
@@ -261,7 +261,7 @@ def sync_offline_queue():
         has_records = False
         with offline_lock:
             try:
-                # Nếu file tạm cũ vẫn tồn tại từ phiên chạy trước (ví dụ do chương trình crash đột ngột), merge lại vào file chính
+                # If a temp file is left from a previous run (for example after a crash), merge it back into the main file
                 if os.path.exists(SYNC_TEMP_FILE):
                     s_rec, o_rec = [], []
                     try:
@@ -289,13 +289,13 @@ def sync_offline_queue():
                     os.rename(OFFLINE_QUEUE_FILE, SYNC_TEMP_FILE)
                     has_records = True
             except Exception as e:
-                print(f"Lỗi khi đổi tên file tạm đồng bộ: {e}")
+                print(f"Error while renaming the temp sync file: {e}")
                 has_records = False
                 
         if not has_records:
             continue
             
-        # Đọc dữ liệu từ file tạm (không cần lock vì file tạm này không bị thread chính ghi đè)
+        # Read the temp file (no lock needed; the main thread does not write this file)
         records = []
         try:
             with open(SYNC_TEMP_FILE, 'r', encoding='utf-8') as f:
@@ -314,7 +314,7 @@ def sync_offline_queue():
                 pass
             continue
             
-        # Thử kết nối tới SQL Server
+        # Try to connect to SQL Server
         conn = None
         try:
             conn = pymssql.connect(
@@ -325,7 +325,7 @@ def sync_offline_queue():
                 database=db_config['database']
             )
             cursor = conn.cursor()
-            print(f"📡 {GREEN}[ĐỒNG BỘ] Đã khôi phục kết nối database. Đang đồng bộ {len(records)} log ngoại tuyến...{RESET}")
+            print(f"📡 {GREEN}[SYNC] Database connection is back. Syncing {len(records)} offline logs...{RESET}")
             
             success_count = 0
             for record in records:
@@ -334,15 +334,15 @@ def sync_offline_queue():
                 success_count += 1
                 
             conn.commit()
-            print(f"🚀 {GREEN}[ĐỒNG BỘ] Đồng bộ thành công {success_count}/{len(records)} bản ghi.{RESET}")
+            print(f"🚀 {GREEN}[SYNC] Synced {success_count}/{len(records)} records.{RESET}")
             
-            # Xóa file tạm sau khi đồng bộ thành công
+            # Delete the temp file after a successful sync
             try:
                 os.remove(SYNC_TEMP_FILE)
             except Exception:
                 pass
         except Exception as e:
-            # Gặp lỗi DB, merge ngược dữ liệu từ file tạm vào file chính dưới lock để bảo toàn dữ liệu
+            # On a database error, merge the temp file back into the main file under the lock so no records are lost
             with offline_lock:
                 try:
                     main_records = []
@@ -359,15 +359,15 @@ def sync_offline_queue():
                     
                     os.remove(SYNC_TEMP_FILE)
                 except Exception as ex:
-                    print(f"Lỗi khi hoàn tác merge records ngoại tuyến: {ex}")
+                    print(f"Error while rolling back the offline-record merge: {ex}")
         finally:
             if conn:
                 conn.close()
 
 def ghi_nhan_cham_cong(ma_hs, loai_chamcong="VAO"):
     """
-    Ghi nhận check-in/out vào bảng thongtinchamcong của SQL Server.
-    Nếu mất kết nối, tự động lưu ngoại tuyến.
+    Record a check-in/out in the thongtinchamcong table in SQL Server.
+    If the connection drops, save the record offline.
     """
     conn = None
     try:
@@ -380,14 +380,14 @@ def ghi_nhan_cham_cong(ma_hs, loai_chamcong="VAO"):
         )
         cursor = conn.cursor()
         
-        # Câu lệnh SQL viết thường toàn bộ tên bảng và tên cột, chèn thêm loai_chamcong
+        # SQL uses lowercase table and column names and also writes loai_chamcong
         sql_query = "insert into thongtinchamcong (mahocsinh, loai_chamcong) values (%s, %s)"
         cursor.execute(sql_query, (ma_hs, loai_chamcong))
         conn.commit()
-        print(f"✅ {GREEN}Điểm danh ({loai_chamcong}) thành công cho học sinh: {ma_hs}{RESET}")
+        print(f"✅ {GREEN}Attendance ({loai_chamcong}) recorded for student: {ma_hs}{RESET}")
         return True
     except Exception as e:
-        print(f"⚠️ {RED}Lỗi khi kết nối SQL Server: {e}. Tiến hành lưu log ngoại tuyến...{RESET}")
+        print(f"⚠️ {RED}Error while connecting to SQL Server: {e}. Saving an offline log...{RESET}")
         save_offline_log(ma_hs, loai_chamcong)
         return False
     finally:
@@ -396,58 +396,58 @@ def ghi_nhan_cham_cong(ma_hs, loai_chamcong="VAO"):
 
 def main():
     print(f"\n{CYAN}=================================================={RESET}")
-    print(f"{CYAN}{BOLD}    HỆ THỐNG CHẤM CÔNG WEBCAM DEMO     {RESET}")
+    print(f"{CYAN}{BOLD}    WEBCAM ATTENDANCE SYSTEM DEMO     {RESET}")
     print(f"{CYAN}=================================================={RESET}")
     
-    # Tự động đồng bộ nâng cấp schema database
+    # Upgrade the database schema if needed
     upgrade_db_schema()
     
-    # Khởi động luồng chạy nền đồng bộ chấm công ngoại tuyến
+    # Start the background thread that syncs offline attendance
     sync_thread = threading.Thread(target=sync_offline_queue, daemon=True)
     sync_thread.start()
     
-    # Mở camera (đọc index từ .env, mặc định là 0)
+    # Open the camera (index from .env, default 0)
     camera_index = int(os.getenv('CAMERA_INDEX', 0))
-    print(f"\n[*] Đang khởi động camera với chỉ số (index): {camera_index}...")
+    print(f"\n[*] Starting camera at index: {camera_index}...")
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
-        print(f"{RED}[LỖI] Không thể mở camera (chỉ số: {camera_index}). Vui lòng kiểm tra kết nối.{RESET}")
+        print(f"{RED}[ERROR] Could not open the camera (index: {camera_index}). Check the connection.{RESET}")
         return
         
-    print(f"{GREEN}[OK] Camera đã sẵn sàng!{RESET}")
+    print(f"{GREEN}[OK] Camera is ready!{RESET}")
     
-    # Đọc thử một khung hình để lấy kích thước thực tế
+    # Read one frame so we know the real size
     ret, frame_init = cap.read()
     if not ret:
-        print(f"{RED}[LỖI] Không thể đọc khung hình khởi tạo từ camera.{RESET}")
+        print(f"{RED}[ERROR] Could not read the initial frame from the camera.{RESET}")
         cap.release()
         return
     h, w, _ = frame_init.shape
     
-    # Load database khuôn mặt từ SQL Server sử dụng tỷ lệ w, h
-    print(f"[*] Đang tải cơ sở dữ liệu khuôn mặt...")
+    # Load face templates from SQL Server using the width and height ratio
+    print(f"[*] Loading the face database...")
     database = load_database(w, h)
-    print(f"{GREEN}[OK] Đã tải thành công {len(database)} khuôn mặt.{RESET}")
+    print(f"{GREEN}[OK] Loaded {len(database)} faces.{RESET}")
     
-    print(f"{YELLOW}>>> HƯỚNG DẪN ĐIỀU KHIỂN CAM:{RESET}")
-    print(f"  - Nhấn phím {BOLD}'q'{RESET} trên cửa sổ camera để {BOLD}THOÁT{RESET}.")
-    print(f"  - Nhấn phím {BOLD}'r'{RESET} trên cửa sổ camera để {BOLD}ĐĂNG KÝ KHUÔN MẶT MỚI{RESET} trực tiếp.")
-    print(f"  - Nhấn phím {BOLD}'i'{RESET} để chọn chế độ chấm công {BOLD}VÀO (Check-In){RESET}.")
-    print(f"  - Nhấn phím {BOLD}'o'{RESET} để chọn chế độ chấm công {BOLD}RA (Check-Out){RESET}.\n")
+    print(f"{YELLOW}>>> CAMERA CONTROLS:{RESET}")
+    print(f"  - Press {BOLD}'q'{RESET} on the camera window to {BOLD}QUIT{RESET}.")
+    print(f"  - Press {BOLD}'r'{RESET} on the camera window to {BOLD}ENROLL A NEW FACE{RESET} directly.")
+    print(f"  - Press {BOLD}'i'{RESET} to set the attendance mode to {BOLD}CHECK-IN{RESET}.")
+    print(f"  - Press {BOLD}'o'{RESET} to set the attendance mode to {BOLD}CHECK-OUT{RESET}.\n")
     
-    # Biến tạm lưu vector khuôn mặt đang được quét để đăng ký khi nhấn phím 'r'
+    # Holds the face vector currently in frame so 'r' can start enrollment
     current_target_vec = None
     
-    # Biến theo dõi xác thực liên tiếp chống nhiễu
+    # Counts consecutive matches so a noisy frame does not count
     last_detected_name = None
     consecutive_count = 0
     
-    # Quản lý hiển thị kết quả xác thực / đăng ký
+    # Controls how long the match or enrollment result stays on screen
     liveness_status = "idle"     
     liveness_result_time = 0.0 
     liveness_result_msg = ""    
     
-    # Quản lý đăng ký học sinh mới bằng cách xoay đầu
+    # State for enrolling a new student by turning their head
     register_mode = False
     register_step = "idle"  
     register_user_id = ""
@@ -458,14 +458,14 @@ def main():
     register_start_time = 0.0
     register_blink_state = "waiting" # "waiting", "closed", "verified"
     
-    # Chế độ chấm công hiện tại (mặc định tự động theo giờ hệ thống)
+    # Current attendance mode (defaults from the system clock)
     current_hour = datetime.now().hour
     active_mode = "VAO" if current_hour < 12 else "RA"
     manual_override = False
     
     register_prompt_active = False
     
-    # Bộ theo dõi chuyển động thời gian chống giả mạo sinh học
+    # Temporal motion tracker used to reject spoofs
     motion_tracker = temporal_motion_tracker()
 
     def prompt_registration_input():
@@ -475,22 +475,22 @@ def main():
         nonlocal database
         
         try:
-            print(f"\n{YELLOW}[ĐĂNG KÝ] Phát hiện lệnh đăng ký khuôn mặt.{RESET}")
-            ma_hs = input(f"{YELLOW} Nhập mã học sinh (ví dụ: hs001): {RESET}").strip()
-            name_input = input(f"{YELLOW} Nhập tên học sinh: {RESET}").strip()
+            print(f"\n{YELLOW}[ENROLL] Enrollment requested.{RESET}")
+            ma_hs = input(f"{YELLOW} Enter the student id (example: hs001): {RESET}").strip()
+            name_input = input(f"{YELLOW} Enter the student name: {RESET}").strip()
             if ma_hs and name_input:
                 overwrite = False
                 if ma_hs in database:
                     existing_name = database[ma_hs]["name"]
-                    confirm = input(f"{YELLOW}⚠️ Mã học sinh '{ma_hs}' đã tồn tại (Tên: {existing_name}). Bạn có muốn cập nhật/ghi đè? (y/n): {RESET}").strip().lower()
+                    confirm = input(f"{YELLOW}⚠️ Student id '{ma_hs}' already exists (name: {existing_name}). Overwrite it? (y/n): {RESET}").strip().lower()
                     if confirm == 'y':
                         overwrite = True
                     else:
-                        print(f"{RED}[HỦY BỎ] Hủy đăng ký để tránh ghi đè dữ liệu.{RESET}\n")
+                        print(f"{RED}[CANCELLED] Enrollment cancelled so existing data is not overwritten.{RESET}\n")
                         register_prompt_active = False
                         return
                 
-                print(f"{YELLOW}[*] Bắt đầu quét góc mặt. Vui lòng nhìn thẳng vào camera...{RESET}")
+                print(f"{YELLOW}[*] Starting pose capture. Look straight at the camera...{RESET}")
                 register_user_id = ma_hs
                 register_user_name = name_input
                 register_overwrite = overwrite
@@ -501,9 +501,9 @@ def main():
                 register_step = "straight"
                 register_mode = True
             else:
-                print(f"{RED}[HUỶ ĐĂNG KÝ] Thiếu thông tin mã học sinh hoặc tên học sinh. Huỷ bỏ.{RESET}\n")
+                print(f"{RED}[ENROLLMENT CANCELLED] Student id or name is missing. Cancelled.{RESET}\n")
         except Exception as e:
-            print(f"{RED}[LỖI] Đăng ký lỗi: {e}{RESET}")
+            print(f"{RED}[ERROR] Enrollment error: {e}{RESET}")
         finally:
             register_prompt_active = False
             if not register_mode:
@@ -512,21 +512,21 @@ def main():
     while True:
         ret, frame = cap.read()
         if not ret:
-            print(f"{RED}[LỖI] Không nhận được khung hình từ camera.{RESET}")
+            print(f"{RED}[ERROR] No frame received from the camera.{RESET}")
             break
             
         current_time = time.time()
         
-        # Tự động cập nhật chế độ chấm công theo thời gian thực (nếu không có override thủ công)
+        # Update the attendance mode from the clock unless the user overrode it
         if not manual_override:
             active_mode = "VAO" if datetime.now().hour < 12 else "RA"
         
-        # Kiểm tra timeout 20 giây trong chế độ đăng ký góc mặt
+        # Abort enrollment if the three poses are not finished within 20 seconds
         if register_mode and (current_time - register_start_time > 20.0):
-            print(f"\n{RED}[HẾT GIỜ] Đã quá 20 giây mà chưa hoàn tất quét 3 góc mặt. Quay lại luồng nhập thông tin.{RESET}")
+            print(f"\n{RED}[TIMED OUT] 20 seconds passed before all 3 angles were captured. Returning to the prompt.{RESET}")
             liveness_status = "rejected"
             liveness_result_time = current_time
-            liveness_result_msg = "Qua thoi gian (20s)!"
+            liveness_result_msg = "Timed out (20s)!"
             
             register_mode = False
             register_step = "idle"
@@ -535,18 +535,18 @@ def main():
             threading.Thread(target=prompt_registration_input, daemon=True).start()
             continue
             
-        # Lật ngang khung hình để giống hiệu ứng soi gương
+        # Flip the frame horizontally so it feels like a mirror
         frame = cv2.flip(frame, 1)
         
-        # --- ĐOẠN CODE XỬ LÝ THIẾU SÁNG ---
-        # Tăng độ tương phản (Alpha) và độ sáng (Beta)
-        alpha = 1.3  # Hệ số tương phản (1.0 - 3.0) giúp làm rõ nét các đường biên
-        beta = 40    # Giá trị độ sáng cộng thêm (0 - 100) giúp kích sáng phòng tối
+        # --- LOW-LIGHT HANDLING ---
+        # Raise contrast (alpha) and brightness (beta)
+        alpha = 1.3  # Contrast factor (1.0-3.0); makes edges clearer
+        beta = 40    # Added brightness (0-100); lifts a dark room
         frame = cv2.convertScaleAbs(frame, alpha=alpha, beta=beta)
         
         h, w, _ = frame.shape
         
-        # Tối ưu hóa hiệu năng: Chuyển ảnh sang BGR2RGB và đặt flag writable = False
+        # Performance: convert BGR to RGB and set writable = False
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         rgb_frame.flags.writeable = False
         results = face_mesh.process(rgb_frame)
@@ -556,11 +556,11 @@ def main():
         
         if results.multi_face_landmarks:
             for face_landmarks in results.multi_face_landmarks:
-                # 1. Trích xuất vector 1434 chiều từ 478 landmarks
+                # 1. Extract a 1434-D vector from 478 landmarks
                 target_vec = np.array([[v.x, v.y, v.z] for v in face_landmarks.landmark])
-                current_target_vec = target_vec  # Lưu lại vector hiện tại phục vụ đăng ký
+                current_target_vec = target_vec  # Keep the current vector for enrollment
                 
-                # Tính toán bounding box từ các điểm landmarks để vẽ khung quanh khuôn mặt
+                # Compute a bounding box from the landmarks so a box can be drawn around the face
                 x_coords = [lm.x for lm in face_landmarks.landmark]
                 y_coords = [lm.y for lm in face_landmarks.landmark]
                 
@@ -574,15 +574,15 @@ def main():
                 x2 = min(w, x_max + padding_x)
                 y2 = min(h, y_max + padding_y)
                 
-                # 2. So sánh và tìm khuôn mặt khớp nhất trong database
+                # 2. Compare and find the closest face in the database
                 best_match_id = "Unknown"
                 best_match_name = "Unknown"
                 min_dist = float('inf')
                 
-                # Chuẩn hóa target_vec trước khi so sánh, khử sai lệch tỷ lệ camera
+                # Normalize target_vec before comparing so camera scale does not skew the match
                 normalized_target_vec = normalize_vector(target_vec, w, h)
                 
-                # Phân tích liveness (Độ sâu 3D & Chuyển động sinh học) cho chế độ chấm công thường
+                # Run the liveness check (3D depth and biological motion) during normal attendance
                 if not register_mode:
                     depth_ok, z_std = check_depth_liveness(face_landmarks)
                     motion_ok, avg_motion = motion_tracker.update_and_check(face_landmarks)
@@ -591,43 +591,43 @@ def main():
                     motion_ok, avg_motion = True, 0.0
                 
                 if register_mode:
-                    # --- CHẾ ĐỘ ĐĂNG KÝ (THU THẬP NHIỀU GÓC MẶT) ---
+                    # --- ENROLLMENT MODE (CAPTURE SEVERAL FACE ANGLES) ---
                     features = extract_liveness_features(face_landmarks)
                     eye_l, eye_r, mouth_openness, yaw, pitch = features
                     
-                    color = (255, 191, 0)  # Màu xanh lam sáng (Cyan)
+                    color = (255, 191, 0)  # Bright cyan
                     
                     if register_step == "straight":
                         if abs(yaw) < 0.08:
-                            # State machine nháy mắt chống giả mạo bằng ảnh tĩnh
+                            # Blink state machine that rejects a still photo
                             if register_blink_state == "waiting":
                                 if eye_l < 0.15 and eye_r < 0.15:
                                     register_blink_state = "closed"
-                                    print(f"{YELLOW}[*] Đã nhắm mắt. Vui lòng mở mắt để hoàn tất xác thực...{RESET}")
-                                label = "[1/3] DANG KY: NHAY MAT DE XAC MINH"
-                                cv2.putText(frame, "NHAY MAT DE XAC THUC LIVENESS", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                                    print(f"{YELLOW}[*] Eyes closed. Open your eyes to finish the check...{RESET}")
+                                label = "[1/3] ENROLL: BLINK TO VERIFY"
+                                cv2.putText(frame, "BLINK TO VERIFY LIVENESS", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
                             elif register_blink_state == "closed":
                                 if eye_l > 0.22 and eye_r > 0.22:
                                     register_blink_state = "verified"
                                     register_stable_frames = 0
-                                    print(f"{GREEN}[OK] Xác thực liveness thành công!{RESET}")
-                                label = "[1/3] DANG KY: MO MAT DE TIEP TUC"
-                                cv2.putText(frame, "MO MAT DE HOAN TAT", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                                    print(f"{GREEN}[OK] Liveness check passed!{RESET}")
+                                label = "[1/3] ENROLL: OPEN EYES TO CONTINUE"
+                                cv2.putText(frame, "OPEN YOUR EYES TO FINISH", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
                             elif register_blink_state == "verified":
                                 register_stable_frames += 1
                                 if register_stable_frames >= 5:
                                     register_vectors["straight"] = target_vec.flatten().tolist()
                                     register_step = "left"
                                     register_stable_frames = 0
-                                    print(f"{GREEN}[OK] Đã chụp và lưu góc THẲNG cho học sinh: {register_user_name}{RESET}")
-                                label = f"[1/3] DANG KY: NHIN THANG ({register_stable_frames}/5)"
-                                cv2.putText(frame, "GIU NGUYEN HUONG NHIN THANG", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                                    print(f"{GREEN}[OK] Captured and saved the STRAIGHT angle for student: {register_user_name}{RESET}")
+                                label = f"[1/3] ENROLL: LOOK STRAIGHT ({register_stable_frames}/5)"
+                                cv2.putText(frame, "KEEP LOOKING STRAIGHT", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
                         else:
                             if register_blink_state != "verified":
                                 register_blink_state = "waiting"
                             register_stable_frames = 0
-                            label = "[1/3] DANG KY: NHIN THANG"
-                            cv2.putText(frame, "NHIN THANG VAO CAMERA", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                            label = "[1/3] ENROLL: LOOK STRAIGHT"
+                            cv2.putText(frame, "LOOK STRAIGHT AT THE CAMERA", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
                         
                     elif register_step == "left":
                         if yaw < -0.15:
@@ -636,12 +636,12 @@ def main():
                                 register_vectors["left"] = target_vec.flatten().tolist()
                                 register_step = "right"
                                 register_stable_frames = 0
-                                print(f"{GREEN}[OK] Da chup va luu goc TRAI cho hoc sinh: {register_user_name}{RESET}")
+                                print(f"{GREEN}[OK] Captured and saved the LEFT angle for student: {register_user_name}{RESET}")
                         else:
                             register_stable_frames = 0
                         
-                        label = f"[2/3] DANG KY: QUAY TRAI ({register_stable_frames}/5)"
-                        cv2.putText(frame, "QUAY DAU SANG TRAI (<-)", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                        label = f"[2/3] ENROLL: TURN LEFT ({register_stable_frames}/5)"
+                        cv2.putText(frame, "TURN YOUR HEAD LEFT (<-)", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
                         
                     elif register_step == "right":
                         if yaw > 0.15:
@@ -650,47 +650,47 @@ def main():
                                 register_vectors["right"] = target_vec.flatten().tolist()
                                 register_step = "complete"
                                 register_stable_frames = 0
-                                print(f"{GREEN}[OK] Da chup va luu goc PHAI cho hoc sinh: {register_user_name}{RESET}")
+                                print(f"{GREEN}[OK] Captured and saved the RIGHT angle for student: {register_user_name}{RESET}")
                         else:
                             register_stable_frames = 0
                         
-                        label = f"[3/3] DANG KY: QUAY PHAI ({register_stable_frames}/5)"
-                        cv2.putText(frame, "QUAY DAU SANG PHAI (->)", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                        label = f"[3/3] ENROLL: TURN RIGHT ({register_stable_frames}/5)"
+                        cv2.putText(frame, "TURN YOUR HEAD RIGHT (->)", (x1, y1 - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
                     
                     if register_step == "complete":
-                        print(f"[*] Dang luu vector 3 goc cua {register_user_name} vao SQL Server...")
+                        print(f"[*] Saving the 3-angle vector for {register_user_name} to SQL Server...")
                         if luu_vector_hoc_sinh(register_user_id, register_user_name, register_vectors, overwrite=register_overwrite):
                             database = load_database(w, h)
-                            print(f"{GREEN}[THÀNH CÔNG] Đăng ký thành công học sinh: {register_user_name}{RESET}\n")
+                            print(f"{GREEN}[SUCCESS] Enrolled student: {register_user_name}{RESET}\n")
                             liveness_status = "approved"
                             liveness_result_time = time.time()
-                            liveness_result_msg = f"Chao {register_user_name}! (Dang ky thanh cong)"
+                            liveness_result_msg = f"Hello {register_user_name}! (enrollment succeeded)"
                         else:
-                            print(f"{RED}[LỖI] Đăng ký thất bại do không luu duoc vao database.{RESET}\n")
+                            print(f"{RED}[ERROR] Enrollment failed because it could not be saved to the database.{RESET}\n")
                             liveness_status = "rejected"
                             liveness_result_time = time.time()
-                            liveness_result_msg = "Dang ky that bai!"
+                            liveness_result_msg = "Enrollment failed!"
                             
                         register_mode = False
                         register_step = "idle"
                         color = (0, 255, 0) if liveness_status == "approved" else (0, 0, 255)
                         label = liveness_result_msg
                     
-                    # Vẽ bounding box và nhãn đăng ký
+                    # Draw the enrollment bounding box and label
                     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                     cv2.rectangle(frame, (x1, y1 - 25), (x2, y1), color, -1)
                     cv2.putText(frame, label, (x1 + 5, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
                 
                 else:
-                    # --- CHẾ ĐỘ CHẤM CÔNG THƯỜNG (NHẬN DIỆN MỌI GÓC MẶT VÀ CHẤM CÔNG TỨC THỜI) ---
+                    # --- NORMAL ATTENDANCE (MATCH ANY SAVED ANGLE AND RECORD IMMEDIATELY) ---
                     best_match_id = "Unknown"
                     best_match_name = "Unknown"
                     min_dist = float('inf')
                     
                     for ma_hs, info in database.items():
-                        # Lặp qua tất cả các vector đã lưu cho học sinh này
+                        # Loop over every saved vector for this student
                         for saved_vec in info["vectors"]:
-                            # Khoảng cách Cosine Distance (1.0 - CosSim)
+                            # Cosine distance (1.0 - cosine similarity)
                             dist = 1.0 - np.dot(normalized_target_vec.flatten(), saved_vec.flatten())
                             if dist < min_dist:
                                 min_dist = dist
@@ -698,27 +698,27 @@ def main():
                                     best_match_id = ma_hs
                                     best_match_name = info["name"]
                                     
-                    # In log debug khoảng cách nhận dạng thực tế để dễ căn chỉnh
+                    # Debug-log the real match distance so the threshold is easy to tune
                     print(f"[DEBUG] Khop: {best_match_name} (ID: {best_match_id}) | Cos Dist: {min_dist:.4f} | Nguong THRESHOLD: {THRESHOLD}")
                     
-                    # 3. Xử lý hiển thị UI và Ghi nhật ký chấm công tức thì
+                    # 3. Update the UI and write the attendance log immediately
                     current_time = time.time()
                     
-                    # Kiểm tra và xử lý trạng thái hiển thị kết quả cũ
+                    # Check whether a previous result is still on screen
                     if liveness_status in ["approved", "rejected"]:
                         if current_time - liveness_result_time >= 2.0:
                             liveness_status = "idle"
                     
                     if liveness_status == "approved":
-                        color = (0, 255, 0)  # Xanh lá (BGR)
+                        color = (0, 255, 0)  # Green (BGR)
                         label = liveness_result_msg
                     elif liveness_status == "rejected":
-                        color = (0, 0, 255)  # Đỏ (BGR)
+                        color = (0, 0, 255)  # Red (BGR)
                         label = liveness_result_msg
                     else:
-                        # Trạng thái rảnh (idle) - thực hiện nhận diện và chấm công nhanh
+                        # Idle state: recognize the face and record attendance immediately
                         if best_match_id != "Unknown":
-                            # Cập nhật đếm liên tiếp chống nhiễu
+                            # Update the consecutive-match counter
                             if best_match_id == last_detected_name:
                                 consecutive_count += 1
                             else:
@@ -727,30 +727,30 @@ def main():
                                 motion_tracker.buffer.clear()
                             
                             if consecutive_count >= 3:
-                                # Kiểm tra liveness bảo mật (Độ sâu 3D & Chuyển động sinh học)
+                                # Security liveness check (3D depth and biological motion)
                                 if not depth_ok or not motion_ok:
                                     liveness_status = "rejected"
                                     liveness_result_time = current_time
                                     liveness_result_msg = "[X] - GIA MAO"
                                     color = (0, 0, 255)
                                     label = liveness_result_msg
-                                    print(f"{RED}[CANH BAO] Phat hien gia mao cho {best_match_name}! Depth OK: {depth_ok} (z_std: {z_std:.4f}), Motion OK: {motion_ok} (avg_motion: {avg_motion:.4f}){RESET}")
+                                    print(f"{RED}[WARNING] Spoof detected for {best_match_name}! Depth OK: {depth_ok} (z_std: {z_std:.4f}), Motion OK: {motion_ok} (avg_motion: {avg_motion:.4f}){RESET}")
                                     consecutive_count = 0
                                     motion_tracker.buffer.clear()
                                 else:
                                     in_cooldown = (best_match_id in last_logged_time) and (current_time - last_logged_time[best_match_id] <= LOG_COOLDOWN_SECONDS)
                                     if in_cooldown:
-                                        # Trong thời gian cooldown chỉ hiện chào thông thường
+                                        # During cooldown, only show a greeting
                                         color = (0, 255, 0)
-                                        label = f"Chao {best_match_name}"
+                                        label = f"Hello {best_match_name}"
                                     else:
-                                        # Điểm danh TỨC THÌ (lưu kèm trạng thái Vào/Ra)
+                                        # Record attendance immediately (including check-in/check-out)
                                         ghi_nhan_cham_cong(best_match_id, active_mode)
                                         last_logged_time[best_match_id] = current_time
                                         liveness_status = "approved"
                                         liveness_result_time = current_time
-                                        liveness_result_msg = f"Chao {best_match_name}! ({active_mode} OK)"
-                                        print(f"{GREEN}[OK] Diem danh ({active_mode}) thanh cong cho {best_match_name}!{RESET}")
+                                        liveness_result_msg = f"Hello {best_match_name}! ({active_mode} OK)"
+                                        print(f"{GREEN}[OK] Attendance ({active_mode}) succeeded for {best_match_name}!{RESET}")
                                         consecutive_count = 0
                                         motion_tracker.buffer.clear()
                                         
@@ -758,7 +758,7 @@ def main():
                                         label = liveness_result_msg
                             else:
                                 color = (0, 165, 255)
-                                label = f"Nhan dang... {best_match_name} ({consecutive_count}/3)"
+                                label = f"Recognizing... {best_match_name} ({consecutive_count}/3)"
                         else:
                             last_detected_name = None
                             consecutive_count = 0
@@ -766,25 +766,25 @@ def main():
                             color = (0, 0, 255)
                             label = "[X] - Unknown"
                     
-                    # Vẽ bounding box và nhãn
+                    # Draw the bounding box and label
                     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                     cv2.rectangle(frame, (x1, y1 - 25), (x2, y1), color, -1)
                     cv2.putText(frame, label, (x1 + 5, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
         else:
-            # Không phát hiện khuôn mặt nào
+            # No face detected
             last_detected_name = None
             consecutive_count = 0
             motion_tracker.buffer.clear()
             if register_mode:
                 register_stable_frames = 0
-                cv2.putText(frame, "KHONG TIM THAY KHUON MAT", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1, cv2.LINE_AA)
-                cv2.putText(frame, "Nhan 'c' de HUY DANG KY", (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+                cv2.putText(frame, "NO FACE FOUND", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1, cv2.LINE_AA)
+                cv2.putText(frame, "Press 'c' to CANCEL ENROLLMENT", (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
         
-        # Vẽ trạng thái chế độ chấm công hiện tại
-        mode_text = f"CHE DO: {'VAO (Check-In)' if active_mode == 'VAO' else 'RA (Check-Out)'}"
+        # Draw the current attendance mode
+        mode_text = f"MODE: {'VAO (Check-In)' if active_mode == 'VAO' else 'CHECK-OUT'}"
         cv2.putText(frame, mode_text, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
         
-        # Vẽ số lượng điểm danh đang lưu ngoại tuyến nếu có
+        # Draw the offline attendance count when there is one
         if os.path.exists(OFFLINE_QUEUE_FILE):
             try:
                 with open(OFFLINE_QUEUE_FILE, 'r') as f:
@@ -794,57 +794,57 @@ def main():
             except Exception:
                 pass
                 
-        # Vẽ overlay thông báo nếu đang chờ nhập liệu terminal không đồng bộ
+        # Draw an overlay while the terminal is waiting for input
         if register_prompt_active:
             overlay = frame.copy()
             cv2.rectangle(overlay, (30, h // 2 - 40), (w - 30, h // 2 + 40), (0, 0, 0), -1)
             cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-            cv2.putText(frame, "NHAP THONG TIN HS TREN TERMINAL CONSOLE...", (45, h // 2 + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, "ENTER STUDENT INFO IN THE TERMINAL...", (45, h // 2 + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2, cv2.LINE_AA)
         
-        # 4. Hiển thị màn hình camera
+        # 4. Show the camera window
         cv2.imshow('Face Recognition Demo', frame)
         
         key = cv2.waitKey(1) & 0xFF
         
-        # 5. Xử lý sự kiện nhấn phím
-        # THOÁT khi nhấn phím 'q'
+        # 5. Handle key presses
+        # QUIT when 'q' is pressed
         if key == ord('q'):
             break
             
-        # ĐĂNG KÝ khuôn mặt mới trực tiếp khi nhấn phím 'r'
+        # ENROLL a new face directly when 'r' is pressed
         elif key == ord('r'):
             if register_mode or register_prompt_active:
-                print(f"⚠️ {YELLOW}[CẢNH BÁO] Hệ thống đang trong tiến trình đăng ký!{RESET}")
+                print(f"⚠️ {YELLOW}[WARNING] Enrollment is already in progress!{RESET}")
             elif current_target_vec is not None:
                 register_prompt_active = True
                 threading.Thread(target=prompt_registration_input, daemon=True).start()
             else:
-                print(f"⚠️ {RED}[CẢNH BÁO] Không phát hiện khuôn mặt nào trước camera để đăng ký!{RESET}")
+                print(f"⚠️ {RED}[WARNING] No face is in front of the camera to enroll!{RESET}")
                 
-        # Phím nóng chuyển sang chế độ chấm công VÀO
+        # Hotkey: switch to check-in
         elif key == ord('i'):
             active_mode = "VAO"
             manual_override = True
-            print(f"🔄 {CYAN}[CHẾ ĐỘ] Đã chuyển sang chấm công: VÀO (Check-In) [Override]{RESET}")
+            print(f"🔄 {CYAN}[MODE] Switched attendance to CHECK-IN [override]{RESET}")
             
-        # Phím nóng chuyển sang chế độ chấm công RA
+        # Hotkey: switch to check-out
         elif key == ord('o'):
             active_mode = "RA"
             manual_override = True
-            print(f"🔄 {CYAN}[CHẾ ĐỘ] Đã chuyển sang chấm công: RA (Check-Out) [Override]{RESET}")
+            print(f"🔄 {CYAN}[MODE] Switched attendance to CHECK-OUT [override]{RESET}")
             
-        # Nhấn phím 'c' để hủy đăng ký khi đang trong chế độ đăng ký
+        # Press 'c' to cancel while enrollment is active
         elif key == ord('c'):
             if register_mode:
                 register_mode = False
                 register_step = "idle"
-                print(f"{RED}[HỦY BỎ] Đã hủy đăng ký học sinh.{RESET}\n")
+                print(f"{RED}[CANCELLED] Student enrollment cancelled.{RESET}\n")
             
-    # Giải phóng tài nguyên
+    # Release resources
     cap.release()
     cv2.destroyAllWindows()
     print(f"\n{CYAN}=================================================={RESET}")
-    print(f"{CYAN}       ĐÃ ĐÓNG CAMERA & KẾT THÚC DỰ ÁN DEMO       {RESET}")
+    print(f"{CYAN}       CAMERA CLOSED AND DEMO FINISHED       {RESET}")
     print(f"{CYAN}=================================================={RESET}\n")
 
 if __name__ == "__main__":
