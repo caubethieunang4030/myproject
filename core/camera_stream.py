@@ -6,9 +6,9 @@ import config
 
 class ThreadedCamera:
     """
-    Tối ưu hóa luồng đọc webcam cho Raspberry Pi 5 & Logitech Brio 100.
-    Chạy luồng nền (background thread) liên tục lấy khung hình mới nhất,
-    loại bỏ hoàn toàn bộ đệm (buffer latency) gây trễ webcam trên OpenCV Linux.
+    Optimized webcam reader for a Raspberry Pi 5 and a Logitech Brio 100.
+    A background thread keeps grabbing the newest frame,
+    which drops the buffer so OpenCV on Linux does not lag behind the webcam.
     """
     def __init__(self, src=config.CAMERA_INDEX, width=config.DISPLAY_WIDTH, height=config.DISPLAY_HEIGHT, fps=config.DISPLAY_FPS):
         self.src = src
@@ -25,36 +25,36 @@ class ThreadedCamera:
         self._init_camera()
         
     def _init_camera(self):
-        # Thử khởi tạo camera với backend thích hợp (V4L2 trên Linux)
-        print(f"🎥 Đang khởi tạo Camera (index={self.src}, backend={config.CAMERA_BACKEND})...")
+        # Try to open the camera with the right backend (V4L2 on Linux)
+        print(f"🎥 Starting camera (index={self.src}, backend={config.CAMERA_BACKEND})...")
         self.cap = cv2.VideoCapture(self.src, config.CAMERA_BACKEND)
         
-        # Nếu mở thất bại, tự động tìm kiếm các cổng /dev/video* khả dụng
+        # If that fails, scan for an available /dev/video* device
         if not self.cap.isOpened():
-            print(f"⚠️ Không thể mở camera index {self.src}. Đang quét thiết bị camera khả dụng...")
+            print(f"⚠️ Could not open camera index {self.src}. Scanning for an available camera...")
             for idx in range(0, 4):
                 if idx == self.src:
                     continue
                 temp_cap = cv2.VideoCapture(idx, config.CAMERA_BACKEND)
                 if temp_cap.isOpened():
-                    print(f"✅ Đã tìm thấy camera khả dụng tại index {idx}!")
+                    print(f"✅ Found an available camera at index {idx}!")
                     self.src = idx
                     self.cap = temp_cap
                     break
                     
         if not self.cap.isOpened():
-            raise RuntimeError("❌ KHÔNG TÌM THẤY WEBCAM! Vui lòng kiểm tra kết nối Logitech Brio 100.")
+            raise RuntimeError("❌ NO WEBCAM FOUND! Check that the Logitech Brio 100 is connected.")
 
-        # Cấu hình codec MJPG tối ưu cho Logitech Brio 100 trên Raspberry Pi 5
+        # Set the MJPG codec that works best for a Logitech Brio 100 on a Raspberry Pi 5
         self.cap.set(cv2.CAP_PROP_FOURCC, config.CAMERA_FOURCC)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         self.cap.set(cv2.CAP_PROP_FPS, self.fps)
         
-        # Giảm thiểu size bộ đệm V4L2 xuống 1 khung hình để chống trễ tích tụ
+        # Shrink the V4L2 buffer to 1 frame so latency does not pile up
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-        # Chờ camera khởi động và đọc thử khung hình (thử lại trong tối đa 3 giây)
+        # Wait for the camera to start and try to read a frame (up to 3 seconds)
         start_t = time.time()
         while time.time() - start_t < 3.0:
             ret, frame = self.cap.read()
@@ -62,12 +62,12 @@ class ThreadedCamera:
                 with self.lock:
                     self.ret = ret
                     self.frame = frame.copy()
-                print(f"✅ Camera Index {self.src} khởi động thành công!")
+                print(f"✅ Camera Index {self.src} started successfully!")
                 break
             time.sleep(0.1)
             
         if not self.ret or self.frame is None:
-            print(f"⚠️ Cảnh báo: Camera index {self.src} không trả về khung hình. Đang thử quét các camera khác...")
+            print(f"⚠️ Warning: camera index {self.src} is not returning frames. Trying the other cameras...")
             for alt_idx in [0, 1, 2, 3]:
                 if alt_idx == self.src:
                     continue
@@ -76,7 +76,7 @@ class ThreadedCamera:
                     for _ in range(10):
                         r, f = temp_cap.read()
                         if r and f is not None:
-                            print(f"✅ Đã kết nối thành công sang Camera Index {alt_idx}!")
+                            print(f"✅ Switched successfully to camera index {alt_idx}!")
                             self.src = alt_idx
                             self.cap.release()
                             self.cap = temp_cap
@@ -89,14 +89,14 @@ class ThreadedCamera:
                         break
 
     def start(self):
-        """Khởi chạy luồng đọc camera ngầm."""
+        """Start the background camera-read thread."""
         self.stopped = False
         self.thread = threading.Thread(target=self._update_loop, daemon=True)
         self.thread.start()
         return self
 
     def _update_loop(self):
-        """Vòng lặp ngầm liên tục cào khung hình mới nhất."""
+        """Background loop that keeps grabbing the newest frame."""
         while not self.stopped:
             if not self.cap.isOpened():
                 time.sleep(0.01)
@@ -111,7 +111,7 @@ class ThreadedCamera:
                 time.sleep(0.005)
 
     def read(self):
-        """Lấy khung hình mới nhất theo cách an toàn đa luồng."""
+        """Return the newest frame in a thread-safe way."""
         with self.lock:
             if self.frame is not None:
                 return self.ret, self.frame.copy()
@@ -121,10 +121,10 @@ class ThreadedCamera:
         return self.cap is not None and self.cap.isOpened() and not self.stopped
 
     def stop(self):
-        """Dừng luồng và giải phóng tài nguyên camera."""
+        """Stop the thread and release the camera."""
         self.stopped = True
         if hasattr(self, 'thread') and self.thread.is_alive():
             self.thread.join(timeout=1.0)
         if self.cap and self.cap.isOpened():
             self.cap.release()
-            print("🎥 Đã giải phóng camera an toàn.")
+            print("🎥 Camera released safely.")

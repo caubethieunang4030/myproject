@@ -3,7 +3,7 @@ import cv2
 
 # Legacy Settings
 IMAGE_LIB_DIR = "images"
-INPUT_IMAGE_PATH = "sontungmtp.jpg"
+INPUT_IMAGE_PATH = "son_tung_mtp.jpg"
 ATTENDANCE_FILE = "attendance.csv"
 MATCH_THRESHOLD = 0.5
 

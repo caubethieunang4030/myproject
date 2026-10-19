@@ -1,126 +1,124 @@
-# Hệ thống Chấm công & Nhận diện Khuôn mặt Chống Giả mạo (Webcam Face Attendance System)
+# Webcam Face Attendance System with Anti-Spoofing
 
-Hệ thống chấm công thông minh sử dụng camera laptop kết hợp thư viện **MediaPipe Face Mesh** và cơ sở dữ liệu **SQL Server**. Hệ thống được tối ưu hóa cho tốc độ điểm danh tức thời (< 0.2s) đồng thời đảm bảo bảo mật sinh trắc học tuyệt đối (Privacy by Design) và tính sẵn sàng cao trước các sự cố mạng.
-
----
-
-## 🌟 Tính năng nổi bật
-
-1. **Đăng ký đa góc mặt (Multi-Pose Enrollment):**
-   - Hướng dẫn người dùng quét đủ 3 hướng mặt: **Nhìn thẳng**, **Quay trái** và **Quay phải**.
-   - Lưu trữ tập hợp 3 vectơ đặc trưng dưới dạng JSON để hỗ trợ so khớp góc nghiêng khi chấm công.
-2. **Nháy mắt xác thực (Blink-to-Register):**
-   - Ở bước nhìn thẳng khi đăng ký, hệ thống bắt buộc người dùng thực hiện động tác **nháy mắt** (nhắm mắt rồi mở mắt).
-   - Ngăn chặn hoàn toàn việc sử dụng ảnh in hoặc ảnh chụp trên điện thoại để đăng ký học sinh giả mạo.
-3. **Mã hóa dữ liệu Sinh trắc học (AES-256 Biometric Encryption):**
-   - Tự động tạo và lưu trữ khóa mã hóa `ENCRYPTION_KEY` an toàn trong `.env`.
-   - Toàn bộ dữ liệu vectơ khuôn mặt được mã hóa bằng thuật toán **AES-256 (Fernet)** trước khi lưu xuống SQL Server.
-   - Hỗ trợ **tương thích ngược hoàn hảo**: tự động phát hiện và giải mã dữ liệu cũ chưa mã hóa mà không gây gián đoạn hệ thống.
-4. **Phân loại Chấm công Vào/Ra (Check-In/Check-Out):**
-   - Mặc định tự động xác định loại chấm công dựa trên thời gian thực hệ thống (Trước 12:00: `VAO`, Từ 12:00: `RA`).
-   - Cho phép giám thị/giáo viên thay đổi chế độ chấm công thủ công bằng phím nóng **`i`** (VÀO) và **`o`** (RA).
-   - Hiển thị trực quan chế độ chấm công hiện tại ngay trên màn hình camera.
-5. **Đồng bộ Ngoại tuyến tự động (Offline Local Queue & Background Sync):**
-   - Nếu mất kết nối với SQL Server, hệ thống tự động ghi nhận điểm danh vào hàng đợi cục bộ `offline_queue.json` bảo toàn đúng thời gian quét thực tế.
-   - Hiển thị số lượng log đang chờ đồng bộ `OFFLINE QUEUE: X recs` trên màn hình camera.
-   - Một luồng nền (background daemon thread) chạy song song quét mỗi 10 giây, tự động đồng bộ hàng loạt (batch insert) lên SQL Server khi có mạng lại và tự dọn dẹp bộ nhớ đệm local.
-6. **Thuật toán so khớp Cosine Distance & Chuẩn hóa L2:**
-   - Landmark được chuyển về không gian pixel thực tế và L2-normalize thành vectơ đơn vị 1D kích thước 1434.
-   - So khớp bằng khoảng cách Cosine `dist = 1.0 - np.dot(...)` với ngưỡng nghiêm ngặt `THRESHOLD = 0.025` (độ lệch góc tối đa 2.5%, tương đương độ tương đồng CosSim >= 97.5%).
-   - Triệt tiêu hoàn toàn sai lệch do khoảng cách camera xa/gần, góc nghiêng khuôn mặt, và biến động ánh sáng.
-7. **Chống nhiễu & Cooldown:**
-   - Chỉ ghi nhận chấm công khi khớp khuôn mặt ổn định trong 3 khung hình liên tiếp.
-   - Cơ chế cooldown chống ghi trùng lặp chấm công (mặc định 15 phút - 900 giây).
+A smart attendance system that uses a laptop camera, the **MediaPipe Face Mesh** library, and **SQL Server**. It is tuned for instant check-in (under 0.2s) while keeping biometric data private by design and staying available when the network fails.
 
 ---
 
-## 🛠️ Cấu trúc dự án
+## Highlights
+
+1. **Multi-pose enrollment:**
+   - The user is guided through 3 face angles: **look straight**, **turn left**, and **turn right**.
+   - The three feature vectors are stored as JSON so a tilted face can still match at check-in.
+2. **Blink-to-register:**
+   - On the straight-ahead step, the user must **blink** (close the eyes, then open them).
+   - This blocks printed photos and photos shown on a phone from being enrolled as a fake student.
+3. **AES-256 biometric encryption:**
+   - An `ENCRYPTION_KEY` is created automatically and stored in `.env`.
+   - Every face vector is encrypted with **AES-256 (Fernet)** before it is written to SQL Server.
+   - **Backward compatible:** older plaintext vectors are detected and decrypted without interrupting the system.
+4. **Check-in / check-out:**
+   - By default the mode follows the clock (before 12:00: `VAO`, from 12:00: `RA`). Those two codes are the values stored in the database.
+   - A proctor or teacher can override the mode with **`i`** (check-in) and **`o`** (check-out).
+   - The current mode is drawn on the camera window.
+5. **Offline queue and background sync:**
+   - If SQL Server is unreachable, attendance is written to a local queue, `offline_queue.json`, with the real scan time.
+   - The camera window shows `OFFLINE QUEUE: X recs`.
+   - A background thread checks every 10 seconds, batch-inserts the queue into SQL Server when the network returns, and then clears the local cache.
+6. **Cosine distance and L2 normalization:**
+   - Landmarks are converted into real pixel space and L2-normalized into a flat unit vector of length 1434.
+   - Matching uses cosine distance `dist = 1.0 - np.dot(...)` with a strict threshold `THRESHOLD = 0.025` (at most 2.5% angular difference, cosine similarity >= 97.5%).
+   - This removes error from camera distance, face tilt, and lighting changes.
+7. **Noise rejection and cooldown:**
+   - A check-in is recorded only after the same face matches for 3 frames in a row.
+   - A cooldown blocks duplicate check-ins (default 15 minutes, 900 seconds).
+
+---
+
+## Project layout
 
 ```text
-├── main.py                 # Luồng chính: hiển thị cam, đăng ký góc mặt, điểm danh & đồng bộ
-├── delete_student.py       # Công cụ CLI nhanh để xóa dữ liệu học sinh/lịch sử khỏi DB
-├── .env                    # Lưu cấu hình kết nối SQL Server & Khóa mã hóa AES-256
-├── requirements.txt        # Danh sách các thư viện Python cần thiết
+├── main.py                 # Main loop: camera, pose enrollment, attendance, and sync
+├── delete_student.py       # CLI tool that deletes a student and their attendance history
+├── .env                    # SQL Server connection settings and the AES-256 key
+├── requirements.txt        # Python dependencies
 ├── core/
-│   ├── anti_fake.py        # Chuẩn hóa L2 vector landmark & trích xuất tính năng liveness (chớp mắt, xoay đầu)
-│   └── compare_face.py     # Script so khớp khuôn mặt tĩnh demo từ ảnh
+│   ├── anti_fake.py        # L2-normalizes landmark vectors and extracts liveness (blink, head turn)
+│   └── compare_face.py     # Demo script that matches a still photo
 ```
 
 ---
 
-## 💾 Thiết kế Cơ sở dữ liệu (SQL Server)
+## Database design (SQL Server)
 
-Hệ thống sử dụng cơ sở dữ liệu SQL Server với cấu trúc bảng viết thường toàn bộ:
+Table and column names are lowercase. The names below are the live schema, so they are left as stored.
 
-### 1. Bảng lưu trữ mẫu khuôn mặt (`vectormathocsinh`)
+### 1. Face-template table (`vectormathocsinh`)
 ```sql
 CREATE TABLE vectormathocsinh (
     mahocsinh VARCHAR(50) PRIMARY KEY,
     tenhocsinh NVARCHAR(255) NOT NULL,
-    facevector VARCHAR(MAX) NOT NULL -- Chứa chuỗi mã hóa AES-256 (Fernet) của dữ liệu góc mặt JSON
+    facevector VARCHAR(MAX) NOT NULL -- AES-256 (Fernet) ciphertext of the pose JSON
 );
 ```
 
-### 2. Bảng nhật ký điểm danh (`thongtinchamcong`)
+### 2. Attendance log (`thongtinchamcong`)
 ```sql
 CREATE TABLE thongtinchamcong (
     id INT IDENTITY(1,1) PRIMARY KEY,
     mahocsinh VARCHAR(50) FOREIGN KEY REFERENCES vectormathocsinh(mahocsinh),
     thoigianquet DATETIME DEFAULT GETDATE(),
-    loai_chamcong NVARCHAR(10) DEFAULT 'VAO' -- Giá trị nhận diện: 'VAO' hoặc 'RA'
+    loai_chamcong NVARCHAR(10) DEFAULT 'VAO' -- Stored values: 'VAO' (check-in) or 'RA' (check-out)
 );
 ```
 
 ---
 
-## 🚀 Hướng dẫn cài đặt & Vận hành
+## Install and run
 
-### 1. Cài đặt môi trường Python
-Khuyến nghị sử dụng Conda với Python `3.10`:
+### 1. Python environment
+Conda with Python `3.10` is recommended:
 ```bash
-# Kích hoạt môi trường (ví dụ môi trường pmcc của bạn)
+# Activate your environment (example: pmcc)
 conda activate pmcc
 
-# Cài đặt các thư viện cần thiết
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Cấu hình biến môi trường
-Tạo file `.env` tại thư mục gốc của dự án với các thông tin kết nối tới SQL Server:
+### 2. Environment variables
+Create a `.env` file in the project root with the SQL Server connection:
 ```env
 DB_SERVER=127.0.0.1
 DB_PORT=1433
 DB_USER=sa
-DB_PASSWORD=Mật_khẩu_SQL_Server_của_bạn
+DB_PASSWORD=your_SQL_Server_password
 DB_DATABASE=chamcongdatabase
 ```
-*(Lưu ý: Khóa `ENCRYPTION_KEY` sẽ tự động được sinh ra và chèn vào file `.env` khi chạy chương trình lần đầu).*
+*(On the first run, `ENCRYPTION_KEY` is generated and written into `.env` automatically.)*
 
-### 3. Chạy ứng dụng Chấm công
-Khởi động ứng dụng bằng lệnh:
+### 3. Run the attendance app
 ```bash
 python main.py
 ```
 
-- **Chấm công:** Chỉ cần đứng trước camera, hệ thống sẽ tự động nhận diện và ghi nhận chấm công vào SQL Server (hoặc hàng đợi offline nếu mất kết nối) trong chưa đầy 0.2s.
-- **Phím điều khiển:**
-  - Nhấn phím **`q`** trên màn hình camera để **THOÁT**.
-  - Nhấn phím **`r`** để **ĐĂNG KÝ HỌC SINH MỚI** trực tiếp.
-  - Nhấn phím **`i`** để chọn chế độ chấm công **VÀO (Check-In)**.
-  - Nhấn phím **`o`** để chọn chế độ chấm công **RA (Check-Out)**.
-  - Nhấn phím **`c`** để **HỦY** phiên đăng ký hiện tại.
+- **Attendance:** stand in front of the camera. The system recognizes the face and writes attendance to SQL Server (or the offline queue if the connection is down) in under 0.2s.
+- **Keys:**
+  - **`q`** on the camera window **quits**.
+  - **`r`** **enrolls a new student** directly.
+  - **`i`** sets the mode to **check-in**.
+  - **`o`** sets the mode to **check-out**.
+  - **`c`** **cancels** the current enrollment.
 
-- **Quy trình Đăng ký mới:**
-  1. Nhấn phím **`r`** trên camera.
-  2. Nhập `Mã học sinh` và `Tên học sinh` trên terminal.
-  3. Nhìn thẳng vào camera và **nháy mắt** để xác thực liveness chống giả mạo bằng ảnh.
-  4. Quay đầu nhẹ sang trái rồi quay đầu nhẹ sang phải theo hướng dẫn hiển thị trên camera.
-  5. Đăng ký hoàn thành, dữ liệu sẽ tự động được mã hóa và đồng bộ lên database.
-  *Phiên đăng ký sẽ tự động hủy nếu sau 20 giây không quét đủ các góc mặt.*
+- **Enrollment:**
+  1. Press **`r`** on the camera window.
+  2. Enter the student id and student name in the terminal.
+  3. Look straight at the camera and **blink** so a photo cannot pass the liveness check.
+  4. Turn slightly left, then slightly right, following the on-screen instructions.
+  5. When enrollment finishes, the data is encrypted and synced to the database.
+  *Enrollment cancels itself if all three angles are not captured within 20 seconds.*
 
-### 4. Xóa thông tin học sinh
-Để xóa dữ liệu học sinh và lịch sử chấm công liên quan:
+### 4. Delete a student
 ```bash
-python delete_student.py <ma_hoc_sinh>
-# Ví dụ: python delete_student.py hs001
+python delete_student.py <student_id>
+# Example: python delete_student.py hs001
 ```

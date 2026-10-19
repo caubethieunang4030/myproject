@@ -24,8 +24,8 @@ def extract_and_save_landmarks(image_rgb, output_json_path="face_vector.json"):
             with open(output_json_path, "w") as f:
                 json.dump(face_vector, f)
             
-            print(f"--- Đã trích xuất {len(face_vector)//3} điểm và lưu vào {output_json_path} ---")
+            print(f"--- Extracted {len(face_vector)//3} points and saved them to {output_json_path} ---")
             return face_vector
         else:
-            print("Không tìm thấy khuôn mặt.")
+            print("No face found.")
             return None

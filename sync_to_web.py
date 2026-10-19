@@ -14,7 +14,7 @@ WEB_API_URL = os.getenv("WEB_API_URL", "http://localhost:8080/api/attendance/syn
 
 def sync_attendance():
     if not os.path.exists(DB_PATH):
-        print(f"❌ CSDL không tồn tại tại đường dẫn: {DB_PATH}")
+        print(f"❌ Database file not found at: {DB_PATH}")
         return
 
     conn = None
@@ -26,7 +26,7 @@ def sync_attendance():
         rows = cursor.fetchall()
         
         if not rows:
-            print("ℹ️ Không có bản ghi điểm danh nào trong CSDL.")
+            print("ℹ️ There are no attendance records in the database.")
             return
 
         payload_records = []
@@ -40,19 +40,19 @@ def sync_attendance():
                 "deviceId": "pi5_brio100"
             })
 
-        print(f"🔄 Đang đồng bộ {len(payload_records)} bản ghi lên Web: {WEB_API_URL} ...")
+        print(f"🔄 Syncing {len(payload_records)} records to the web app: {WEB_API_URL} ...")
         
         headers = {"Content-Type": "application/json"}
         response = requests.post(WEB_API_URL, json={"records": payload_records}, headers=headers, timeout=10)
         
         if response.status_code == 200:
             res_data = response.json()
-            print(f"✅ Đồng bộ thành công {res_data.get('synced', 0)} bản ghi điểm danh lên Server Web!")
+            print(f"✅ Synced {res_data.get('synced', 0)} attendance records to the web server!")
         else:
-            print(f"❌ Đồng bộ thất bại (HTTP {response.status_code}): {response.text}")
+            print(f"❌ Sync failed (HTTP {response.status_code}): {response.text}")
             
     except Exception as e:
-        print(f"❌ Lỗi khi kết nối hoặc gửi dữ liệu: {e}")
+        print(f"❌ Error while connecting or sending data: {e}")
     finally:
         if conn:
             conn.close()
