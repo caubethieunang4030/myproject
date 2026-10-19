@@ -1,6 +1,8 @@
 # Webcam Face Attendance System with Anti-Spoofing
 
-A smart attendance system that uses a laptop camera, the **MediaPipe Face Mesh** library, and **SQL Server**. It is tuned for instant check-in (under 0.2s) while keeping biometric data private by design and staying available when the network fails.
+A school check-in system that recognizes a student's face on a webcam. The student enrolls by looking straight, blinking, and turning their head, so a printed photo or a phone picture cannot be registered in their place. If the network drops, the check-in is saved locally and synced when the connection comes back.
+
+It uses a laptop camera, the **MediaPipe Face Mesh** library, and **SQL Server**. Matching is tuned for instant check-in (under 0.2s), and face data is encrypted before it is stored.
 
 ---
 
@@ -42,8 +44,11 @@ A smart attendance system that uses a laptop camera, the **MediaPipe Face Mesh**
 ├── .env                    # SQL Server connection settings and the AES-256 key
 ├── requirements.txt        # Python dependencies
 ├── core/
-│   ├── anti_fake.py        # L2-normalizes landmark vectors and extracts liveness (blink, head turn)
-│   └── compare_face.py     # Demo script that matches a still photo
+│   ├── utils.py            # L2-normalizes landmark vectors and extracts liveness (blink, head turn)
+│   ├── compare_face.py     # Demo script that matches a still photo
+│   ├── face_detection.py   # Still-image face detection
+│   ├── facial_landmark.py  # Draws landmarks and writes a vector file
+│   └── landmark_utils.py   # Saves a face vector as JSON
 ```
 
 ---
