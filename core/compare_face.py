@@ -63,37 +63,37 @@ def identify_person(target_vec, threshold=0.06):
 
                     best_match = os.path.splitext(file)[0]
         except Exception as e:
-            print(f"Lỗi đọc file {file}: {e}")
+            print(f"Failed to read file {file}: {e}")
                 
     return best_match, min_dist
 
 if __name__ == "__main__":
   
-    img_mau = "anhsontungso1.jpeg"
-    img_test = "anhsontungso2.jpeg"
+    img_mau = "son_tung_photo_1.jpeg"
+    img_test = "son_tung_photo_2.jpeg"
     
     
     if not os.listdir(DB_PATH):
-        print(f"[*] Database trống. Đang lấy {img_mau} làm dữ liệu gốc...")
+        print(f"[*] Database is empty. Using {img_mau} as the reference sample...")
         v_mau = get_face_vector(img_mau)
         if v_mau is not None:
             np.savetxt(os.path.join(DB_PATH, "NV01_SonTung.txt"), v_mau.flatten(), delimiter=',')
-            print("Đã tạo file mẫu thành công.")
+            print("Reference file created.")
         else:
-            print(f"Không tìm thấy file {img_mau} để làm mẫu.")
+            print(f"Could not find file {img_mau} to use as the reference.")
 
 
-    print(f"[*] Đang quét khuôn mặt: {img_test}")
+    print(f"[*] Scanning face: {img_test}")
     current_vec = get_face_vector(img_test)
 
     if current_vec is not None:
         name_id, score = identify_person(current_vec)
         
         if name_id not in ["Unknown", "Empty_DB"]:
-            print(f"NHẬN DIỆN THÀNH CÔNG: {name_id}")
-            print(f"Độ sai lệch: {score:.5f}")
+            print(f"MATCH FOUND: {name_id}")
+            print(f"Distance: {score:.5f}")
         else:
-            msg = "DATABASE CHƯA CÓ DỮ LIỆU" if name_id == "Empty_DB" else "KHÔNG KHỚP NHÂN VIÊN"
-            print(f"{msg} (Sai lệch thấp nhất: {score:.5f})")
+            msg = "DATABASE HAS NO DATA" if name_id == "Empty_DB" else "NO EMPLOYEE MATCH"
+            print(f"{msg} (Lowest distance: {score:.5f})")
     else:
-        print(f"Không tìm thấy khuôn mặt trong file {img_test}.")
+        print(f"No face found in file {img_test}.")
