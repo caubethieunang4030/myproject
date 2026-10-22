@@ -1,3 +1,7 @@
+"""Webcam check-in that writes each arrival and departure to a database.
+
+The original aim was students in highland areas: keep the attendance log, read absence patterns, and leave time to help a student who might leave school. Funding for cameras, machines, and travel was not there, so this file is the prototype. It records check-ins. It does not predict dropouts.
+"""
 import csv
 from datetime import datetime
 import json
