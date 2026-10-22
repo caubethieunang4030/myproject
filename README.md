@@ -2,9 +2,11 @@
 
 ## Why this exists
 
-I started this for students in highland areas. Each check-in and check-out would go into a database, so an absence pattern could be read over time. The pattern was the point: if a student looked likely to leave school, someone could help before they were gone.
+I started this in grade 11 at Rabun Gap-Nacoochee School. The first idea was computer vision for my grandmother's flower and fruit farm in the Mekong Delta: detect fruit and identify plant disease, so less of that work had to be done by hand. After looking at the scope with my technical advisor, it was too large to finish in one summer.
 
-Cameras, computers at the schools, and travel cost more than I had. The field version stopped there. This repository is the prototype I could finish and publish. It records who arrived and who left, including when the network drops. It does not predict who will drop out. That needs a real attendance history from those schools, and this repository does not contain one.
+I then turned to face check-in for students in Vietnam's highland areas. Each arrival and departure would be stored, so an absence pattern could be read over time. If a student looked likely to leave school, someone could help before they were gone. That part could not be carried out. It needed real attendance records from those schools and real trials, and I did not have them.
+
+This repository is the check-in prototype I finished during summer research at Affina in Vietnam. A student enrolls on a webcam, a printed photo or a phone picture cannot take their place, and a check-in is still saved when the network drops. It records who arrived and who left. It does not predict who will drop out.
 
 ## What it does
 
