@@ -1,5 +1,13 @@
 # Webcam Face Attendance System with Anti-Spoofing
 
+## Why this exists
+
+I started this for students in highland areas. Each check-in and check-out would go into a database, so an absence pattern could be read over time. The pattern was the point: if a student looked likely to leave school, someone could help before they were gone.
+
+Cameras, computers at the schools, and travel cost more than I had. The field version stopped there. This repository is the prototype I could finish and publish. It records who arrived and who left, including when the network drops. It does not predict who will drop out. That needs a real attendance history from those schools, and this repository does not contain one.
+
+## What it does
+
 A school check-in system that recognizes a student's face on a webcam. The student enrolls by looking straight, blinking, and turning their head, so a printed photo or a phone picture cannot be registered in their place. If the network drops, the check-in is saved locally and synced when the connection comes back.
 
 It uses a laptop camera, the **MediaPipe Face Mesh** library, and **SQL Server**. Matching is tuned for instant check-in (under 0.2s), and face data is encrypted before it is stored.
