@@ -28,7 +28,7 @@
 ## PROJECT OVERVIEW
 
 **ORIGINAL AIM**  
-The first idea, in grade 11, was computer vision for a family flower and fruit farm in the Mekong Delta. That scope was too large for one summer. The aim that followed was face check-in for students in Vietnam's highland areas: store each arrival and departure, read the absence pattern, and leave time to help a student who might leave school. That prediction needed real attendance records and real trials, which this project does not have. What was built, and what this proposal evaluates, is the check-in prototype from summer research at Affina. It records attendance. It does not predict who will drop out.
+The first idea, in grade 11, was computer vision for a family flower and fruit farm in the Mekong Delta. That scope was too broad for one summer. The aim that followed was face check-in for students in Vietnam's highland areas: store each arrival and departure, read the absence pattern, and leave time to help a student who might leave school. That was also too hard to carry out, because there was no real attendance data from those students and no real test with them. The work that was finished, and that this proposal evaluates, is the face check-in built during a summer internship at Affina. It records attendance. It does not predict who will drop out.
 
 **PROJECT GOAL**  
 Develop and evaluate an autonomous, on-premise Edge AI biometric attendance appliance running on Raspberry Pi 5.
