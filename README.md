@@ -2,11 +2,11 @@
 
 ## Why this exists
 
-I started this in grade 11 at Rabun Gap-Nacoochee School. The first idea was computer vision for my grandmother's flower and fruit farm in the Mekong Delta: detect fruit and identify plant disease, so less of that work had to be done by hand. After looking at the scope with my technical advisor, it was too large to finish in one summer.
+I started this in grade 11 at Rabun Gap-Nacoochee School. The first idea was computer vision for my grandmother's flower and fruit farm in the Mekong Delta: recognize fruit and plant disease, so less of that work had to be done by hand. After looking at the scope with my technical advisor, it was too broad to finish in one summer.
 
-I then turned to face check-in for students in Vietnam's highland areas. Each arrival and departure would be stored, so an absence pattern could be read over time. If a student looked likely to leave school, someone could help before they were gone. That part could not be carried out. It needed real attendance records from those schools and real trials, and I did not have them.
+I switched to facial recognition for students in Vietnam's highland areas who might leave school. Each arrival and departure would be stored, so an absence pattern could be read over time and someone could help before a student was gone. That was also too hard to carry out. I did not have real attendance data from those students, or a real test with them.
 
-This repository is the check-in prototype I finished during summer research at Affina in Vietnam. A student enrolls on a webcam, a printed photo or a phone picture cannot take their place, and a check-in is still saved when the network drops. It records who arrived and who left. It does not predict who will drop out.
+So the work I could finish was my summer internship at Affina in Vietnam: a face check-in prototype. A student enrolls on a webcam, a printed photo or a phone picture cannot take their place, and a check-in is still saved when the network drops. It records who arrived and who left. It does not predict who will drop out.
 
 ## What it does
 
