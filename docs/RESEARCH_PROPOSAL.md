@@ -28,7 +28,7 @@
 ## PROJECT OVERVIEW
 
 **ORIGINAL AIM**  
-The check-in was meant for students in highland areas. Each arrival and departure would be stored so an absence pattern could be read over time, and someone could help a student who looked likely to leave school. Cameras, computers at the schools, and travel cost more than I had, so that field version was not built. This proposal is the prototype I could finish and publish. It records attendance. It does not predict who will drop out. That prediction needs a real attendance history from those schools, which this repository does not contain.
+The first idea, in grade 11, was computer vision for a family flower and fruit farm in the Mekong Delta. That scope was too large for one summer. The aim that followed was face check-in for students in Vietnam's highland areas: store each arrival and departure, read the absence pattern, and leave time to help a student who might leave school. That prediction needed real attendance records and real trials, which this project does not have. What was built, and what this proposal evaluates, is the check-in prototype from summer research at Affina. It records attendance. It does not predict who will drop out.
 
 **PROJECT GOAL**  
 Develop and evaluate an autonomous, on-premise Edge AI biometric attendance appliance running on Raspberry Pi 5.

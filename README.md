@@ -1,6 +1,6 @@
 # Edge AI Biometric Attendance Appliance
 
-I started this for students in highland areas. Each check-in and check-out would go into a database, so an absence pattern could be read over time. The pattern was the point: if a student looked likely to leave school, someone could help before they were gone. Cameras, computers at the schools, and travel cost more than I had, so the field version stopped. This branch is the prototype I could finish and publish. It records who arrived and who left. It does not predict who will drop out.
+I started this in grade 11 at Rabun Gap-Nacoochee School. The first idea was computer vision for my grandmother's flower and fruit farm in the Mekong Delta: detect fruit and identify plant disease, so less of that work had to be done by hand. After looking at the scope with my technical advisor, it was too large to finish in one summer. I then turned to face check-in for students in Vietnam's highland areas, so an absence pattern could show who might leave school in time for someone to help. That prediction needed real attendance records and real trials, and I did not have them. This branch is the check-in prototype I finished during summer research at Affina. It records who arrived and who left. It does not predict who will drop out.
 
 The prototype runs computer vision on a **Raspberry Pi 5** (or a development laptop), stores **encrypted landmark vectors** (not raw photos), resists common **2D photo / phone-screen spoofs**, and keeps checking people in during **network outages** via SQLite WAL + an offline JSON queue.
 
