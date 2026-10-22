@@ -27,6 +27,9 @@
 
 ## PROJECT OVERVIEW
 
+**ORIGINAL AIM**  
+The check-in was meant for students in highland areas. Each arrival and departure would be stored so an absence pattern could be read over time, and someone could help a student who looked likely to leave school. Cameras, computers at the schools, and travel cost more than I had, so that field version was not built. This proposal is the prototype I could finish and publish. It records attendance. It does not predict who will drop out. That prediction needs a real attendance history from those schools, which this repository does not contain.
+
 **PROJECT GOAL**  
 Develop and evaluate an autonomous, on-premise Edge AI biometric attendance appliance running on Raspberry Pi 5.
 

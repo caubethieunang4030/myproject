@@ -1,6 +1,8 @@
 # Edge AI Biometric Attendance Appliance
 
-Autonomous, on-premise face-attendance system for schools and SMEs. It runs computer vision on a **Raspberry Pi 5** (or a development laptop), stores **encrypted landmark vectors** (not raw photos), resists common **2D photo / phone-screen spoofs**, and keeps checking people in during **network outages** via SQLite WAL + an offline JSON queue.
+I started this for students in highland areas. Each check-in and check-out would go into a database, so an absence pattern could be read over time. The pattern was the point: if a student looked likely to leave school, someone could help before they were gone. Cameras, computers at the schools, and travel cost more than I had, so the field version stopped. This branch is the prototype I could finish and publish. It records who arrived and who left. It does not predict who will drop out.
+
+The prototype runs computer vision on a **Raspberry Pi 5** (or a development laptop), stores **encrypted landmark vectors** (not raw photos), resists common **2D photo / phone-screen spoofs**, and keeps checking people in during **network outages** via SQLite WAL + an offline JSON queue.
 
 **Research proposal (full write-up):** [`docs/RESEARCH_PROPOSAL.md`](docs/RESEARCH_PROPOSAL.md)
 
