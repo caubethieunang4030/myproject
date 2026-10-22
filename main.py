@@ -1,6 +1,6 @@
 """Webcam check-in that writes each arrival and departure to a database.
 
-The original aim was students in highland areas: keep the attendance log, read absence patterns, and leave time to help a student who might leave school. Funding for cameras, machines, and travel was not there, so this file is the prototype. It records check-ins. It does not predict dropouts.
+The first idea was computer vision for a family farm. The aim that followed was an attendance log for highland students, so an absence pattern could show who might leave school in time for someone to help. That prediction needed real school records and real trials, which I did not have. This file is the check-in prototype. It records attendance. It does not predict dropouts.
 """
 import cv2
 import mediapipe as mp
