@@ -1,6 +1,6 @@
 """Webcam check-in that writes each arrival and departure to a database.
 
-The first idea was computer vision for a family farm. The aim that followed was an attendance log for highland students, so an absence pattern could show who might leave school in time for someone to help. That prediction needed real school records and real trials, which I did not have. This file is the check-in prototype. It records attendance. It does not predict dropouts.
+The first idea was recognizing plant disease on a family farm, and that scope was too broad. The next aim was an attendance log for highland students, so an absence pattern could show who might leave school in time for someone to help. There was no real student data and no real test with those students, so the work that was finished is the face check-in built during a summer internship at Affina. It records attendance. It does not predict dropouts.
 """
 import csv
 from datetime import datetime
