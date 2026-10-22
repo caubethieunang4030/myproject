@@ -2,11 +2,11 @@
 
 ## Why this exists
 
-I started this in grade 11 at Rabun Gap-Nacoochee School. The first idea was computer vision for my grandmother's flower and fruit farm in the Mekong Delta: recognize fruit and plant disease, so less of that work had to be done by hand. After looking at the scope with my technical advisor, it was too broad to finish in one summer.
+My father wanted an app for older people: they would scan a plant and the app would name its disease. The reason was my grandmother's garden. I was far away, and collecting leaf samples and examples of each disease was too difficult, so that app was not built.
 
-I switched to facial recognition for students in Vietnam's highland areas who might leave school. Each arrival and departure would be stored, so an absence pattern could be read over time and someone could help before a student was gone. That was also too hard to carry out. I did not have real attendance data from those students, or a real test with them.
+Before I joined Affina, I turned to a face project for students in Vietnam's mountain areas. Each arrival and departure would be stored, so an absence pattern could be read over time and someone could help a student who might leave school. I did not have real attendance data from those students, or a real test with them.
 
-So the work I could finish was my summer internship at Affina in Vietnam: a face check-in prototype. A student enrolls on a webcam, a printed photo or a phone picture cannot take their place, and a check-in is still saved when the network drops. It records who arrived and who left. It does not predict who will drop out.
+The work I could finish was the face check-in I built during my summer internship at Affina. A student enrolls on a webcam, a printed photo or a phone picture cannot take their place, and a check-in is still saved when the network drops. It records who arrived and who left. It does not predict who will drop out.
 
 ## What it does
 
