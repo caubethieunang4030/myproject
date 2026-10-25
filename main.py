@@ -1,6 +1,6 @@
 """Webcam check-in that writes each arrival and departure to a database.
 
-My father and I wanted an app so older people could scan a plant and have its disease recognized, because my grandmother has a garden. I was far away, and collecting leaf and disease samples was too difficult. Before joining Affina I switched to a face check-in for students in mountain areas. There was no real student data and no real test with them, so this file is the attendance prototype built at Affina. It records check-ins. It does not predict dropouts.
+I started this on my own. I wanted an app so older people could scan a plant and have its disease recognized. My grandmother has a garden, and that is what my father wanted. I was far away, and collecting leaf and disease samples was too difficult. Before joining Affina I switched to a face check-in for students in mountain areas. There was no real student data and no real test with them, so this file is the attendance prototype built at Affina. It records check-ins. It does not predict dropouts.
 """
 import csv
 from datetime import datetime
