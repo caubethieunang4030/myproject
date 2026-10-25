@@ -2,7 +2,7 @@
 
 ## Why this exists
 
-My father wanted an app for older people: they would scan a plant and the app would name its disease. The reason was my grandmother's garden. I was far away, and collecting leaf samples and examples of each disease was too difficult, so that app was not built.
+My father and I wanted an app for older people: they would scan a plant and the app would name its disease. The reason was my grandmother's garden. I was far away, and collecting leaf samples and examples of each disease was too difficult, so that app was not built.
 
 Before I joined Affina, I turned to a face project for students in Vietnam's mountain areas. Each arrival and departure would be stored, so an absence pattern could be read over time and someone could help a student who might leave school. I did not have real attendance data from those students, or a real test with them.
 
