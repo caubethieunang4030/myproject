@@ -28,7 +28,7 @@
 ## PROJECT OVERVIEW
 
 **ORIGINAL AIM**  
-My father wanted an app so older people could scan a plant and have its disease recognized, because my grandmother has a garden. I was far away, and collecting leaf samples and examples of each disease was too difficult, so that app was not built. Before I joined Affina, I turned to a face check-in for students in Vietnam's mountain areas: store each arrival and departure, read the absence pattern, and leave time to help a student who might leave school. There was no real attendance data from those students and no real test with them. The work that was finished, and that this proposal evaluates, is the face check-in built during a summer internship at Affina. It records attendance. It does not predict who will drop out.
+My father and I wanted an app so older people could scan a plant and have its disease recognized, because my grandmother has a garden. I was far away, and collecting leaf samples and examples of each disease was too difficult, so that app was not built. Before I joined Affina, I turned to a face check-in for students in Vietnam's mountain areas: store each arrival and departure, read the absence pattern, and leave time to help a student who might leave school. There was no real attendance data from those students and no real test with them. The work that was finished, and that this proposal evaluates, is the face check-in built during a summer internship at Affina. It records attendance. It does not predict who will drop out.
 
 **PROJECT GOAL**  
 Develop and evaluate an autonomous, on-premise Edge AI biometric attendance appliance running on Raspberry Pi 5.
